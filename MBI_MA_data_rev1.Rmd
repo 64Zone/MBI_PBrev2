@@ -1,0 +1,361 @@
+---
+title: "MBI_MA_data_rev1"
+author: "Sicong Liu"
+date: '2022-11-06'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, echo = FALSE, dpi = 300, cache.lazy = FALSE, tidy = "styler", out.width = "90%", fig.align = "center", fig.width = 10, fig.asp = 0.618, error = F, warning = F)
+
+options(dplyr.print_min = Inf,
+        tibble.width = Inf, 
+        tibble.print_max = 20,
+        max.print = 100000,
+        digits = 8, 
+        scipen = 999999)
+
+rm(list=ls())
+library(metafor)
+library(robumeta)
+library(clubSandwich)                      
+library(tidyverse)
+library(weightr)
+library(ggplot2)
+library(reshape2)
+library(cowplot)
+library(janitor)
+library(bda)                               
+library(lavaan)
+library(ggridges)
+library(ggExtra)
+library(GGally)
+library(viridis)
+library(MASS)
+library(ordinal)       
+library(boot)          
+library(dvmisc)        
+library(hrbrthemes)   
+library(patchwork)    
+library(rstatix)
+set.seed(55555)
+
+
+my_computer <- 
+  # "win"
+  "mac"
+
+if(my_computer == "mac"){
+  new_data_path <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"
+  data_investigate_path <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/data_pipeline/Investigate_ES+AUX/"
+  my_computer2 <- "mac2"
+} else {
+  new_data_path <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"
+  data_investigate_path <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/data_pipeline/Investigate_ES+AUX/"
+  my_computer2 <- "win2"
+}
+
+
+win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_submission/"
+mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_submission/"
+win2 <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_master/"
+mac2 <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_master/"
+
+win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
+mac_desktop <- "~/Desktop/"
+my_desktop <- get(paste0(my_computer, "_desktop"))
+
+select <- dplyr::select
+```
+
+
+```{r data_merge}
+## list all datasets and correspondance
+df <- read_csv(paste0(get(my_computer), "MBI_master_data.csv"))          # data in 1st submission 
+df_new <- read_csv(paste0(new_data_path, "data_Aug2022.csv")) %>%        # Aug 2022 data (ES + FUN_ES)
+  select(-c(...1, authyear...235)) %>%
+  rename(authyear = authyear...2, record = record.x, 
+         INC = INC.x, PRPOS = PRPOS.x, 
+         GR1 = GR1.x, GR2 = GR2.x, GR3 = GR3.x, X = X.x)
+# df2 <- read_csv(paste0(get(my_computer2), "CompleteES_May2021.csv"))     # Ben's old data (1st submission)
+df2 <- read_csv(paste0(get(my_computer2), "CompleteES_May2021_target.csv"))     # Ben's old data (1st submission) + target var
+df3 <- read_csv(paste0(get(my_computer2), "CompleteES+Aux_May2021.csv"))        # Ben's old data (1st submission)
+df4 <- read_csv(paste0(data_investigate_path, "CompleteES_Aug2022_Aux_r05.csv")) %>%  # Aug 2022 data (ES+Aux + FUN_ES2)
+  select(-c(...1, authyear...232)) %>%
+  rename(authyear = authyear...2, record = record.x,
+         INC = INC.x, PRPOS = PRPOS.x,
+         GR1 = GR1.x, GR2 = GR2.x, GR3 = GR3.x, X = X.x)
+# df5 <- read_csv(paste0(data_investigate_path, "CompleteES_Aug2022_r05.csv")) %>%   # Aug 2022 data (ES + FUN_ES2) no 'target'
+#   select(-c(...1, authyear...232)) %>%
+#   rename(authyear = authyear...2, record = record.x, 
+#          INC = INC.x, PRPOS = PRPOS.x, 
+#          GR1 = GR1.x, GR2 = GR2.x, GR3 = GR3.x, X = X.x)
+
+
+## find unique studies
+studies <- df %>% distinct(authyear) %>% flatten_chr()                # 304
+studies2 <- df2 %>% distinct(authyear) %>% flatten_chr()              # 326
+studies3 <- df3 %>% distinct(authyear) %>% flatten_chr()              # 331
+new_studies <- df_new %>% distinct(authyear) %>% flatten_chr()        # 479
+new_studies2 <- df4 %>% distinct(authyear) %>% flatten_chr()          # 488
+
+
+# ## verify d computation
+# # conclusion: the calculations are consistent but new datasets missed some values -> use overlap data from old data
+# ind_var <- c("authyear","record","varname","outcomeID","prob_mean","wave_base1")
+# verify_d_index <- df %>%
+#   select(ind_var) %>%
+#   distinct(authyear,record,varname,outcomeID,prob_mean,wave_base1, .keep_all = T)
+# d1 <- verify_d_index %>% 
+#   left_join(df, by = ind_var) %>%
+#   select(ind_var, ES1=d) %>%
+#   distinct(authyear,record,varname,outcomeID,prob_mean,wave_base1, .keep_all = T)
+# d2 <- verify_d_index %>% 
+#   left_join(df2, by = ind_var) %>%
+#   select(ind_var, ES2=d) %>%
+#   distinct(authyear,record,varname,outcomeID,prob_mean,wave_base1, .keep_all = T)
+# d3 <- verify_d_index %>% 
+#   left_join(df3, by = ind_var) %>%
+#   select(ind_var, ES3=d) %>%
+#   distinct(authyear,record,varname,outcomeID,prob_mean,wave_base1, .keep_all = T)
+# d4 <- verify_d_index %>% 
+#   left_join(df4, by = ind_var) %>%
+#   select(ind_var, ES4=d) %>%
+#   distinct(authyear,record,varname,outcomeID,prob_mean,wave_base1, .keep_all = T)
+# d5 <- verify_d_index %>% 
+#   left_join(df_new, by = ind_var) %>%
+#   select(ind_var, ES5=d) %>%
+#   distinct(authyear,record,varname,outcomeID,prob_mean,wave_base1, .keep_all = T)
+# verify_d_data <- d1 %>%
+#   left_join(d2, by = ind_var) %>%
+#   left_join(d3, by = ind_var) %>%
+#   left_join(d4, by = ind_var) %>%
+#   left_join(d5, by = ind_var) 
+
+
+## keep new studies
+df_add <- df_new %>% filter(!authyear %in% studies)
+
+# df_add %>% distinct(authyear...2) %>% write_csv(paste0(my_desktop, "study2add.csv"))
+studies2add <- read_csv(paste0(new_data_path, "study2add_edited.csv")) %>%
+  filter(include == 1) %>% 
+  select(authyear) %>%
+  flatten_chr()
+intersect(studies2add, studies2)     # old Main data 0 overlap w/ new studies -> add new stuides after align var order
+intersect(studies2add, studies3)     # old Main+Aux data 0 overlap w/ new studies -> add new stuides after align var order
+
+# c(studies, studies2add) %>% sort() %>% as.tibble %>% write_csv(paste0(my_desktop,"study2include.csv"))
+# studies2check <- c(
+#   "Gryczynski et al 2021 (Yubo week24)", "Gryczyski et al., 2021 (Wenhao week 25)", 
+#   "Williams et al., 2018", "Williams, 2018b",
+#   "Williamson et al. 2005 (Adolescents) COMPLETED", "Williamson et al. 2005 (Parents) COMPLETED")
+# df_new$reference[which(df_new$authyear...2 %in% studies2check)]
+# new_studies <- c(studies, studies2add) %>% 
+#   as.tibble() %>%
+#   filter(value != "Williams, 2018b")   # duplicate of Williams et al., 2018 (I later checked the supplemental file and the study is valid and included)
+df2_add <- df_new %>% filter(authyear %in% studies2add)
+df3_add <- df4 %>% filter(authyear %in% studies2add)
+
+## bind datasets
+var_main <- intersect(names(df2), names(df_new))     # variable 
+var_aux <- intersect(names(df3), names(df4))
+variables <- intersect(intersect(names(df2), names(df_new)), intersect(names(df3), names(df4)))
+
+# correspondance: df2 <-> df_new/df2_add; df3 <-> df4/df3_add
+setdiff(names(df_new), var_main)        # sd, w9-11, X, X.y (these var can be dropped)
+setdiff(names(df2_add), var_main)        # sd, w9-11, X, X.y (these var can be dropped)
+setdiff(names(df2), var_main)           # (no difference: add 'authyear.1')
+setdiff(names(df3), var_aux)            # (no difference: add 'authyear.1')
+setdiff(names(df3_add), var_aux)        # w9-11, X, X.y (these var can be dropped)
+setdiff(names(df4), var_aux)            # w9-11, X, X.y (these var can be dropped)
+
+# verify again
+setdiff(names(df_new), names(df2))       # Main: sd, w9-11, X, X.y 
+setdiff(names(df2), names(df_new))       # Main: authyear.1
+setdiff(names(df4), names(df3))          # Main + Aux: w9-11, X, X.y
+setdiff(names(df3), names(df4))          # Main + Aux: authyear.1
+
+## select() helps adjust var. order
+var_df2 <- df2 %>% colnames()
+var_df3 <- df3 %>% colnames()
+
+var_df2_numeric <- df2 %>% select(is.numeric) %>% colnames
+var_df3_numeric <- df3 %>% select(is.numeric) %>% colnames
+
+new_df2 <- df2_add %>% 
+  mutate(`authyear.1` = authyear, d = as.numeric(d)) %>%
+  select(all_of(var_df2)) %>%
+  mutate(across(var_df2_numeric, as.numeric)) %>%
+  bind_rows(df2) # %>%
+  # write_csv(paste0(my_desktop, "new_ES.csv"))
+new_df3 <- df3_add %>% 
+  mutate(`authyear.1` = authyear, d = as.numeric(d)) %>%
+  select(all_of(var_df3)) %>%
+  mutate(across(var_df3_numeric, as.numeric)) %>%
+  bind_rows(df3) # %>%
+  # write_csv(paste0(my_desktop, "new_ES+Aux.csv"))
+```
+
+
+```{r investigate datasets}
+### investigate dataset differences about ES number -------------------------------------------------
+## Conclusion: Ben's ES+Aux data seemed based on applying FUN_ES2 to Main+Aux data.
+##             my ES+Aux data were processed in "new_data_after_database_update}" in JCCP_v4_data.Rmd
+table_new <- df_new %>% filter(authyear %in% studies) %>% tabyl(authyear)
+table2 <- df2 %>% filter(authyear %in% studies) %>% tabyl(authyear)
+table3 <- df3 %>% filter(authyear %in% studies) %>% tabyl(authyear)
+# table4 <- df4 %>% filter(authyear %in% studies) %>% tabyl(authyear)
+# rbind(table2, table3, table_new, table4) %>% write_csv("~/Desktop/dat_check2.csv")   # my ES+Aux data: consistent!
+table5 <- df5 %>% filter(authyear %in% studies) %>% tabyl(authyear)
+rbind(table2, table3, table_new, table5) %>% openxlsx::write.xlsx("~/Desktop/dat_check3.csv")
+
+
+## investigate dataset differences about stub
+var_new <- df_new %>% filter(authyear %in% studies) %>% tabyl(varname)
+var2 <- df2 %>% filter(authyear %in% studies) %>% tabyl(varname)
+var3 <- df3 %>% filter(authyear %in% studies) %>% tabyl(varname)
+# var4 <- df4 %>% filter(authyear %in% studies) %>% tabyl(varname)
+# rbind(var2, var3, var_new, var4) %>% write_csv("~/Desktop/var_check2.csv")         # my ES+Aux data: consistent!
+var5 <- df5 %>% filter(authyear %in% studies) %>% tabyl(varname)
+rbind(var2, var3, var_new, var5) %>% openxlsx::write.xlsx("~/Desktop/var_check3.csv")
+
+
+## investigate dataset differences about stub category (main vs. aux)
+# conclusion: FUN_ES script only generates Main outcomes; FUN_ES2 scripts generates Main and Aux spelled in Capital Letters
+# former dataset is a subset of the latter dataset
+var_new <- df_new %>% tabyl(varname)
+var4 <- df4 %>% tabyl(varname)
+rbind(var_new, var4) %>% openxlsx::write.xlsx("~/Desktop/var_check_category.csv")    # my ES+Aux data: consistent!
+```
+
+
+```{r MBI_data_checking}
+## generate study list for MBI data checking among all the coders (10 individuals)
+df5 <- read.csv(paste0(my_desktop, "new_ES+Aux.csv"))
+
+## studies w/ NAs on FLUP
+list1 <- c("Amaro et al., 2007 (updated)", "Dakof, 2010", "Jolly et al., 2018", "Pedley et al., 2018", "Williams, 2018b")
+list0 <- c("Bahromov & Weine, 2011 (updated)", "Lewis et al., 2015 (updated)DUPLICATED", "Lugada et al., 2010 (updated)", "Soares et al., 2014 (new)")
+df5 <- df5 %>%
+  mutate(
+    FLUP = as.numeric(FLUP),
+    FLUP = case_when(
+    authyear %in% list1 ~ 1,
+    authyear %in% list0 ~ 0,
+    T ~ FLUP
+  )) # %>%
+  # filter(FLUP == 1)
+ 
+df5 %>%
+  filter(FLUP == 1) %>%
+  # filter(is.na(FLUP)) %>%
+  distinct(authyear, .keep_all = T) %>%
+  select(authyear, reference) %>%
+  write_csv(paste0(my_desktop,"study_list_for_checking_6month.csv"))
+
+
+## investigate the two studies coded by Fan Xuan Chen into PartA (w/ FLUP coding) and PartB (w/o FLUP coding)
+a <- df5 %>% filter(authyear == "Pedley et al., 2018") # %>% write_csv(paste0(my_desktop, "Pdeley_et_al.csv"))
+b <- df %>% filter(authyear == "Pedley et al., 2018") 
+c <- df5 %>% filter(authyear == "Williams, 2018b") # %>% write_csv(paste0(my_desktop, "Williams_2018b.csv"))
+d <- df %>% filter(authyear == "Williams, 2018b") 
+e <- df5 %>% filter(authyear == "Jolly et al., 2018") # %>% write_csv(paste0(my_desktop, "Jolly_et_al_2018.csv"))
+f <- df %>% filter(authyear == "Jolly et al., 2018") 
+
+## check the duration of intervention & timing of 1st posttest
+sink(paste0(my_desktop, "intervention_assessment.txt"))
+cat("Duration of Intervention\n")
+df5 %>% select(dofinter, T1) %>% tabyl(dofinter) %>% adorn_totals()
+cat("\n\n\n")
+cat("Timing of 1st Followup Assessment\n")
+df5 %>% select(dofinter, T1) %>% tabyl(T1) %>% adorn_totals()
+sink()
+
+## check FLUP for each domain 
+sink(paste0(my_desktop, "FLUP_domain.txt"))
+cat("\nLifestyle\n")
+df5 %>% distinct(authyear, .keep_all = T) %>% filter(GR1 == 1) %>% tabyl(FLUP) %>% adorn_totals() # LS
+cat("\nHIV\n")
+df5 %>% distinct(authyear, .keep_all = T) %>% filter(GR2 == 1) %>% tabyl(FLUP) %>% adorn_totals() # HIV
+cat("\nAU_DU\n")
+df5 %>% distinct(authyear, .keep_all = T) %>% filter(GR3 == 1) %>% tabyl(FLUP) %>% adorn_totals() # AU&DU
+sink()
+
+## check FLUP for each domain exclusively (no domain-crossing studies)
+df5 <- df5 %>%
+  mutate(GRsum = GR1+GR2+GR3)
+sink(paste0(my_desktop, "FLUP_domain_exclusive.txt"))
+cat("\nDomain Number\n")
+df5 %>% distinct(authyear, .keep_all = T) %>% tabyl(GRsum)
+cat("\nLifestyle\n")
+df5 %>% distinct(authyear, .keep_all = T) %>% filter(GRsum == 1 & GR1 == 1) %>% tabyl(FLUP) %>% adorn_totals() # LS
+cat("\nHIV\n")
+df5 %>% distinct(authyear, .keep_all = T) %>% filter(GRsum == 1 & GR2 == 1) %>% tabyl(FLUP) %>% adorn_totals() # HIV
+cat("\nAU_DU\n")
+df5 %>% distinct(authyear, .keep_all = T) %>% filter(GRsum == 1 & GR3 == 1) %>% tabyl(FLUP) %>% adorn_totals() # AD
+sink()
+
+## 
+df5 %>% distinct(authyear, .keep_all = T) %>% select(c(authyear, authyear.1))
+df5 %>% distinct(authyear, authyear.1, .keep_all = T) %>% select(c(authyear, authyear.1)) # 3 extra due to Pedley2018, Jolly2018, and Williams2018b
+
+
+## randomly assign articles to coders (I later manually adjusted cases where the same coders check their own papers)
+# coders <- c("Dolores", "Yubo", "Angela", "Zone", "Wenhao",
+#             "Sally", "Marta", "Devlin", "Lydia", "Qijia")
+# 
+# name <- sample(rep(coders, 43), size = 426, replace = F)
+# name %>% as_tibble(c("", name)) %>% write_csv(paste0(my_desktop, 
+#                                             "names.csv"))
+# name %>% tabyl()
+```
+
+
+```{r p_value_and_label_issue_in_outcome_coding}
+df <- read_csv("~/Desktop/Sheet3_bind_MainAux.csv")
+dat <- read.csv("~/Desktop/new_ES+Aux.csv")
+df_all_studies <- df %>% distinct(authyear) %>% flatten_chr()
+df_studies <- dat %>% distinct(authyear) %>% flatten_chr()
+
+## check number of entered p values
+df_ID <- df %>%
+  select(authyear)
+df2 <- df %>% 
+  select(contains("_p_")) %>%
+  mutate(across(everything(), as.numeric))
+df3 <- df2 %>%
+  naniar::replace_with_na_all(condition = ~ abs(.x) > 1)
+df4 <- df_ID %>% bind_cols(df3)
+df5 <- df4 %>% mutate(across(contains("_p_"), ~ !is.na(.x))) 
+df5["number_of_p"] <- rowSums(df5[2:ncol(df5)])
+
+
+df5 %>% tabyl(number_of_p) %>% adorn_totals()
+df5 %>% filter(authyear %in% df_studies) %>% distinct(authyear, .keep_all = T) %>% tabyl(row_sum) %>% adorn_totals()
+
+# df5$authyear[df5$row_sum == 2]
+
+## check label issues 
+dat2 <- df %>%
+  select(authyear, contains("_type_")) %>%
+  mutate(across(everything(), as.character))
+dat3 <- tibble()
+for(i in 1:length(df_all_studies)){
+  dat4 <- dat2 %>%
+    filter(authyear == df_all_studies[i]) %>%
+    map(~length(unique(.x)))
+  dat3 <- dat3 %>%
+    bind_rows(dat4)
+}  
+
+dat5 <- dat3 %>%
+  mutate(authyear = df_all_studies)
+dat6 <- dat5[(rowSums(dat5[2:ncol(dat5)]) > (ncol(dat5)-1)), ]
+dat7 <- dat6[, (c(TRUE, colSums(dat6[2:ncol(dat6)]) > nrow(dat6)))]
+write_csv(dat5, "~/Desktop/entry_label_check_v1.csv")
+write_csv(dat7, "~/Desktop/entry_label_check_v2.csv")
+
+```
+
+
+

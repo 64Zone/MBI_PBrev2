@@ -1,0 +1,590 @@
+---
+title: "MBI_MA_v7_PS2_model"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, echo = FALSE, dpi = 300, cache.lazy = FALSE, tidy = "styler", out.width = "90%", fig.align = "center", fig.width = 10, fig.asp = 0.618, error = F, warning = F)
+options(dplyr.print_min=Inf,
+        tibble.width=Inf, 
+        tibble.print_max=20,
+        max.print = 100000,
+        digits = 5, 
+        scipen=999999)
+
+rm(list=ls())
+library(metafor)
+library(robumeta)
+library(clubSandwich)  # for RVE with metafor; requires version 0.5.1 or higher
+library(tidyverse)
+library(weightr)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(gghalves)
+library(ggridges)
+library(ggExtra)
+library(GGally)        # plot data of continuous and categorical variables in matrix form
+library(hrbrthemes)    # fonts & background (e.g., dark mode)
+library(patchwork)     # multiple plots
+library(viridis)
+library(reshape2)
+library(cowplot)
+library(dplyr)
+library(janitor)
+library(lavaan)
+library(VIM)
+library(ordinal)       # clmm(), clmm2(); 2-level ordinal logistic mixed-effect model
+library(MASS)
+library(ggeffects)
+library(effects) 
+library(boot)          # inv.logit()
+library(dvmisc)        # quant_groups()
+library(htmlwidgets)   # save to html
+# https://marissabarlaz.github.io/portfolio/ols/
+set.seed(55555)
+
+win <- "C:/Users/sliu/Box/Zone/7_MBI_Database/PS_Model/"
+win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
+mac <- "~/Box Sync/Zone/7_MBI_Database/PS_Model/"
+
+
+## prepare the data
+df <- read_csv(paste0(mac, "PSM_data2.csv")) 
+var_numeric <- c("NMainrecom", "nopostt", "NAUXrecomend", "rcptmsi", "pubyear")
+var_outcome <- c("NMainrecom", "NMainrecom_ord")
+
+df1 <- df %>%
+  mutate(across(any_of(var_numeric), as.numeric)) %>%
+  mutate(across(!any_of(var_numeric), as.factor)) # %>%
+  # mutate(pubyear_ord = fct_collapse(pubyear_ord, `1` = c("1", "2")))            # further collapse pubyear to 0/1 var.
+
+
+### ------------- if reviewers criticize the PS model, I can consider categorize the NMainrecom into 'MBI' vs 'Non-MBI' to mimic an experimental vs. control design ------------------------------
+
+  
+## use 4-level instead of 5-level ordinal outcome
+# df1 <- df1 %>%
+#   mutate(NMainrecom_ord = fct_collapse(NMainrecom_ord, `3` = c("3", "4")))      
+# str(df1_slice)
+```
+
+
+```{r model_GLMM, echo=F}
+### ----------------------- simple clmm for understanding ordinal::clmm2() ------------------------
+### -------------- Christensen19, p.5 for fitted() and predict() -------------------------
+# lhs1 <- "NMainrecom_ord"
+# rhs1 <- c("scaa")
+# formula_1 <- as.formula(paste0(lhs1, "~", paste(rhs1, collapse = "+")))
+# glmm1 <- clmm2(formula_1, random = studyid, data = df1, link = "logistic", Hess = T, nAGQ = 10)
+# df1 <- cbind(df1, fitted(glmm1), predict(glmm1, newdata = df1)) 
+# df1 <- df1 %>%
+#   relocate(NMainrecom_ord, scaa, studyid, `fitted(glmm1)`, `predict(glmm1, newdata = df1)`)
+### ------------------------- verifying computation using 2 cases ------------------------ 
+### -------------- note: parameterization in Christensen19, p.1  -------------------------
+### ---------- logit(p(Y_i <= j)) = theta_j - Beta * X - (random effect | ID) ------------
+# studyid == 1  
+#           alpha - beta1*scaa - (rand|studyid) = logit        ~  prob. 
+#     0|1: -0.929 - 1.278 * 0 - (0.05077) = -0.929 (-0.97977)  ~ inv.logit = 0.283 (0.273)
+#     1|2: 0.202 - 1.278 * 0 - (0.05077) = 0.202 (0.15123)  ~ inv.logit = 0.55 (0.538)
+#     2|3: 1.480 - 1.278 * 0 - (0.05077) = 1.480 (1.42923)  ~ inv.logit = 0.815 (0.807)  
+
+# studyid == 11  
+#     0|1: -0.929 - 1.278 * 0 - (-0.23663) = -0.929 (-0.69237)   ~ inv.logit = 0.283 (0.334)
+#     1|2: 0.202 - 1.278 * 0 - (-0.23663) = 0.202 (0.43863)  ~ inv.logit = 0.55 (0.608)
+### --------------------------------------------------------------------------------------
+
+lhs <- "NMainrecom_ord"    # 5-level / 4-level ordinal outcome
+
+# --------------------------------------------- Model 1 & 5: main effects --------------------------------------------
+# rhs <- "1"          # baseline model
+
+rhs <- c("pubyear_ord", "rcptmsi_ord", "nopostt_ord",              # final model
+         "GENDTARG", "SELFSEL",
+         "scaa", "scai", "scas", "scbar", 
+         "scsm",
+         "FLUP",
+         "GR1", "GR2", "GR3",                               
+         "regionj")
+
+# ------------------------------------------- Model 2 & 6: add interactions ------------------------------------------
+# rhs <- c("pubyear_ord", "rcptmsi_ord", "nopostt_ord",
+#           "GENDTARG", "SELFSEL",
+#           "scaa", "scai", "scas", "scbar", "scsm",
+#           "FLUP", "GR1", "GR2", "GR3", "regionj",
+#           "GENDTARG:SELFSEL",
+#           "scaa:scai", "scaa:scas", "scas:scbar", "scbar:scsm", "scai:scsm", "scaa:scsm",
+#           "FLUP:regionj", "FLUP:GR1", "FLUP:GR2", "FLUP:GR3", "GR1:GR2", "GR2:GR3", "GR1:GR3", "GR2:regionj", "GR1:regionj")
+
+# ---------------------------------------- Model 3 & 7: add more interactions ----------------------------------------
+# rhs <- c("pubyear_ord", "rcptmsi_ord", "nopostt_ord",
+#           "GENDTARG", "SELFSEL",
+#           "scaa", "scai", "scas", "scbar", "scsm",
+#           "FLUP", "GR1", "GR2", "GR3", "regionj",
+#           "GENDTARG:SELFSEL",
+#           "scaa:scai", "scaa:scas", "scas:scbar", "scbar:scsm", "scai:scsm", "scaa:scsm",
+#           "FLUP:regionj", "FLUP:GR1", "FLUP:GR2", "FLUP:GR3", "GR1:GR2", "GR2:GR3", "GR1:GR3", "GR2:regionj", "GR1:regionj",
+#           "pubyear_ord:rcptmsi_ord", "pubyear_ord:nopostt_ord", "nopostt_ord:regionj", "pubyear_ord:FLUP", "rcptmsi_ord:scsm")
+
+# ---------------------------------------- Model 4 & 8: add further interactions ----------------------------------------
+# rhs <- c("pubyear_ord", "rcptmsi_ord", "nopostt_ord",
+#           "GENDTARG", "SELFSEL",
+#           "scaa", "scai", "scas", "scbar", "scsm",
+#           "FLUP", "GR1", "GR2", "GR3", "regionj",
+#           "GENDTARG:SELFSEL",
+#           "scaa:scai", "scaa:scas", "scas:scbar", "scbar:scsm", "scai:scsm", "scaa:scsm",
+#           "FLUP:regionj", "FLUP:GR1", "FLUP:GR2", "FLUP:GR3", "GR1:GR2", "GR2:GR3", "GR1:GR3", "GR2:regionj", "GR1:regionj",
+#           "pubyear_ord:rcptmsi_ord", "pubyear_ord:nopostt_ord", "nopostt_ord:regionj", "pubyear_ord:FLUP", "rcptmsi_ord:scsm",
+#           "scna:FLUP", "SELFSEL:GR1", "SELFSEL:GR3",
+#           "GENDTARG:FLUP", "scsm:GR1", "scas:GR1", "scbar:GR2")
+
+
+formula_1 <- as.formula(paste0(lhs, "~", paste(rhs, collapse = "+")))
+glmm1 <- clmm2(formula_1, random = studyid, data = df1, link = "logistic", Hess = T, nAGQ = 10) 
+glm1 <- polr(formula_1, data = df1, Hess = T)                  # get model.matrix() for fixed-effect part
+
+# pr2 <- profile(glmm1, range=c(.1, 4), nSteps=30, trace=0)    # get 95% CI of random effect 
+# confint(pr2); plot(pr2)
+summary(glmm1)
+
+### ---------- logit(p(Y_i <= j)) = theta_j - Beta * X - (random effect | ID) ------------
+### --------------------- scalar = - Beta * X - (random effect | ID) ---------------------
+scalar_fixed_part <- function(glmm_fit, glm_fit, df) {
+  
+  glm_term_name <- colnames(model.matrix(glm_fit)[, -1])       # glm term names after removing 'intercept' term
+  glmm_term_name <- names(glmm_fit$beta)
+  location <- glm_term_name == glmm_term_name
+  
+  sum_term_match <- sum(glm_term_name == glmm_term_name)       # logical indicators of matching
+  total_term_number <- length(glmm_fit$beta)                   # total number of fixed-effect terms
+  
+  if (sum_term_match != total_term_number) {
+    
+    print("Error: Model terms are not perfectly matching. Check models.")
+    print(paste0("Unmatching term locations: ", location))
+    
+    break
+    
+  } else {
+    
+    coef_vector <- - as.vector(glmm_fit$beta)                  # B; '-' to be consistent w/ model parameterization
+    design_matrix <- model.matrix(glm_fit)[, -1]               # X after removing 'intercept' term
+    
+    scalar_fe <- as.vector(design_matrix %*% coef_vector)      # XB; fixed effects
+    scalar_re <- - sapply(df$studyid, function(i){             # random effects; '-' to be consistent w/ model parameterization
+      
+                            j <- which(levels(df$studyid) == 
+                                 as.character(df$studyid[i]))
+                            
+                            glmm_fit$ranef[j]
+                          })
+    scalar <- scalar_fe + scalar_re
+    
+    scalar
+    
+  }
+}
+
+## get propensity score
+df1["ps_scalar"] <- scalar_fixed_part(glmm1, glm1, df1)
+```
+
+## 1st round of stratifying PS
+```{r ps_stratification, echo=F}
+## find strata cutoffs 
+cutoffs <- names(table(quant_groups(df1$ps_scalar, 5)))          # separate into 5 strata (quintiles)
+
+## strata cutoff function
+strata_fun <- function(strata_cutoffs, strata_num, pattern_num) {
+  # match pattern for cutoff values
+  patterns <- c("-*\\d+.{1}\\d+(?=,)", "(?<=,)-*\\d+.{1}\\d+")   # note: it cannot recognize integer cutoffs
+  as.numeric(str_extract(strata_cutoffs[strata_num], patterns[pattern_num]))
+}
+
+## create strata variable
+df1 <- df1 %>%
+  mutate(ps_scalar_strata = case_when(
+    ps_scalar >= strata_fun(cutoffs, 1, 1) - 0.1 &               # 0.1 to adjust for rounding errors (quant_groups fun. may be flawed)
+      ps_scalar <= strata_fun(cutoffs, 1, 2) ~ "stratum1", 
+    ps_scalar > strata_fun(cutoffs, 2, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 2, 2) ~ "stratum2", 
+    ps_scalar > strata_fun(cutoffs, 3, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 3, 2) ~ "stratum3", 
+    ps_scalar > strata_fun(cutoffs, 4, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 4, 2) ~ "stratum4",
+    ps_scalar > strata_fun(cutoffs, 5, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 5, 2) + 0.1 ~ "stratum5", # 0.1 to adjust for rounding errors
+  ))
+```
+
+
+```{r treatment_ps_dist, echo=F, fig.width=14}
+## density distributions: PS | NMainrecom_ord
+pre_slice <- df1 %>%
+  ggplot(aes(x = ps_scalar, y = NMainrecom_ord, fill = NMainrecom_ord)) +   
+    geom_density_ridges(
+      aes(point_color = NMainrecom_ord, point_fill = NMainrecom_ord, point_shape = NMainrecom_ord),
+      alpha = .2, point_alpha = 0.7, jittered_points = TRUE) +
+    scale_point_color_hue(l = 40) +
+    theme_minimal()
+
+## pruning for the area of common support
+# ------------------ Model 1 -----------------
+stratum1 <- df1 %>%
+  filter(ps_scalar_strata == "stratum1") %>%
+  filter(ps_scalar > -6) %>%
+  slice_head(n = 100)
+stratum5 <- df1 %>%
+  filter(ps_scalar_strata == "stratum5") %>%
+  filter(ps_scalar < -1) %>%
+  slice_head(n = 5)
+df1_slice <- df1 %>%
+  filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+  bind_rows(stratum1) %>%
+  bind_rows(stratum5)
+
+# ----------------- Model 2 ------------------
+# stratum1 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum1") %>%
+#   filter(ps_scalar > -6) %>%
+#   slice_head(n = 100)
+# stratum5 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum5") %>%
+#   filter(ps_scalar < -1) %>%
+#   slice_head(n = 1)
+# df1_slice <- df1 %>%
+#   filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+#   bind_rows(stratum1) %>%
+#   bind_rows(stratum5)
+
+# ----------------- Model 3 ------------------
+# stratum1 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum1") %>%
+#   filter(ps_scalar > -6) %>%
+#   slice_head(n = 80)
+# stratum5 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum5") %>%
+#   filter(ps_scalar < -1) %>%
+#   slice_head(n = 5)
+# df1_slice <- df1 %>%
+#   filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+#   bind_rows(stratum1) %>%
+#   bind_rows(stratum5)
+
+# ----------------- Model 4 ------------------
+# stratum1 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum1") %>%
+#   filter(ps_scalar > -5.5) %>%
+#   slice_head(n = 5)
+# stratum5 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum5") %>%
+#   filter(ps_scalar < -1.25) %>%
+#   slice_head(n = 5)
+# df1_slice <- df1 %>%
+#   filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+#   bind_rows(stratum1) %>%
+#   bind_rows(stratum5)
+
+# ----------------- Model 5 ------------------
+# stratum1 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum1") %>%
+#   # filter(ps_scalar > -6) %>%
+#   slice_head(n = 5)
+# stratum5 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum5") %>%
+#   # filter(ps_scalar < -1) %>%
+#   slice_head(n = 5)
+# df1_slice <- df1 %>%
+#   filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+#   bind_rows(stratum1) %>%
+#   bind_rows(stratum5)
+
+# ----------------- Model 6 ------------------
+# stratum1 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum1") %>%
+#   filter(ps_scalar > -6) %>%
+#   slice_head(n = 60)
+# stratum5 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum5") %>%
+#   filter(ps_scalar < -1) %>%
+#   slice_head(n = 0)
+# df1_slice <- df1 %>%
+#   filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+#   bind_rows(stratum1) %>%
+#   bind_rows(stratum5)
+
+# ----------------- Model 7 ------------------
+# stratum1 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum1") %>%
+#   filter(ps_scalar > -6) %>%
+#   slice_head(n = 5)
+# stratum5 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum5") %>%
+#   filter(ps_scalar < -1) %>%
+#   slice_head(n = 5)
+# df1_slice <- df1 %>%
+#   filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+#   bind_rows(stratum1) %>%
+#   bind_rows(stratum5)
+
+# ----------------- Model 8 ------------------
+# stratum1 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum1") %>%
+#   # filter(ps_scalar > -6) %>%
+#   slice_head(n = 0)
+# stratum5 <- df1 %>%
+#   filter(ps_scalar_strata == "stratum5") %>%
+#   # filter(ps_scalar < -1) %>%
+#   slice_head(n = 0)
+# df1_slice <- df1 %>%
+#   filter(!ps_scalar_strata %in% c("stratum1", "stratum5")) %>%
+#   bind_rows(stratum1) %>%
+#   bind_rows(stratum5)
+
+## post-pruning density distributions: PS | NMainrecom_ord
+post_slice <- df1_slice %>%
+  ggplot(aes(x = ps_scalar, y = NMainrecom_ord, fill = NMainrecom_ord)) +   
+    geom_density_ridges(
+      aes(point_color = NMainrecom_ord, point_fill = NMainrecom_ord, point_shape = NMainrecom_ord),
+      alpha = .2, point_alpha = 0.7, jittered_points = TRUE) +
+    scale_point_color_hue(l = 40) +
+    theme_minimal() 
+
+pre_slice | post_slice
+
+## how treatment levels are affected by pruning
+tabyl(df1$NMainrecom_ord); tabyl(df1_slice$NMainrecom_ord)
+
+## save propensity scores
+# df1_slice %>%
+#   dplyr::select(c(ID, ps_scalar, ps_scalar_strata)) %>%
+#   write_csv(paste0(mac, "Zone/PS_scalar.csv"))
+```
+
+## 2nd round of stratifying PS after pruning
+```{r ps_stratification2, echo=F}
+## find strata cutoffs 
+cutoffs <- names(table(quant_groups(df1_slice$ps_scalar, 5)))          # separate into 5 strata (quantiles)
+
+## strata cutoff function
+strata_fun <- function(strata_cutoffs, strata_num, pattern_num) {
+  # match pattern for cutoff values
+  patterns <- c("-*\\d+.{1}\\d+(?=,)", "(?<=,)-*\\d+.{1}\\d+")         # note: it cannot recognize integer cutoffs   
+  as.numeric(str_extract(strata_cutoffs[strata_num], patterns[pattern_num]))
+}
+
+## create strata variable
+df1_slice <- df1_slice %>%
+  mutate(ps_scalar_strata = case_when(
+    ps_scalar >= strata_fun(cutoffs, 1, 1) - 0.1 &               # 0.1 to adjust for rounding errors (quant_groups fun. may be flawed)
+      ps_scalar <= strata_fun(cutoffs, 1, 2) ~ "stratum1", 
+    ps_scalar > strata_fun(cutoffs, 2, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 2, 2) ~ "stratum2", 
+    ps_scalar > strata_fun(cutoffs, 3, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 3, 2) ~ "stratum3", 
+    ps_scalar > strata_fun(cutoffs, 4, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 4, 2) ~ "stratum4",
+    ps_scalar > strata_fun(cutoffs, 5, 1) & 
+      ps_scalar <= strata_fun(cutoffs, 5, 2) + 0.1 ~ "stratum5", # 0.1 to adjust for rounding errors
+  ))
+
+
+## I noticed something inaccurate from 'ps_scalar_strata' perhaps due to rounding errors
+# I thus created 'ps_scalar_strata2' that is consistent with quant_groups(). Replace 'ps_scalar_strata!'
+df1_slice <- df1_slice %>%
+  mutate(ps_scalar_strata2 = quant_groups(df1_slice$ps_scalar, 5), 
+         ps_scalar_strata2 = factor(ps_scalar_strata2, labels = c("str1", "str2", "str3", "str4", "str5")))
+
+
+# tabyl(df1_slice$ps_scalar_strata); tabyl(df1_slice$ps_scalar_strata2); df1_slice %>% tabyl(ps_scalar_strata, ps_scalar_strata2)
+
+## save the processing -------------------------------------------------------------------------------------------------------
+# write_csv(df1_slice, paste0(win, "PSM_data2_pruned.csv"))
+# save()
+# save.image(paste0(win, "PS_Model_v1.RData"), compress = F)      # save workspace; info loss (e.g., var. class) if compressed
+# saveRDS(df1_slice, paste0(win, "PSM_data2_pruned.Rds"))        # save only 1 object without losing info; can also reassign name
+## ---------------------------------------------------------------------------------------------------------------------------
+```
+
+
+```{r ps_diagnositics, echo=F, fig.width=18}
+## read the processing -------------------------------------------------------------------------------------------------------
+# df1_slice <- read_csv(paste0(win, "PSM_data2_pruned.csv"))
+load(paste0(mac, "PS_Model_v1.RData"))
+# df1_slice <- readRDS(paste0(win, "PSM_data2_pruned.Rds"))      # pruned data I need for checking covariance balance
+
+## categorize variables
+var_ditch <- c("GENDTARG", "SELFSEL",                                           # 13 var 
+               "scaa", "scai", "scas", "scbar", 
+               "scsm",
+               "FLUP",
+               "GR1", "GR2", "GR3",
+               "regionj", "nopostt_ord")
+var_multi <- c("pubyear_ord", "rcptmsi_ord")                                    # 2 var
+var_all <- c("NMainrecom_ord", var_ditch, var_multi)
+## ---------------------------------------------------------------------------------------------------------------------------
+
+## function to generate diagnostic figures
+fig_ps <- function(stratum, data) {
+  
+fig1 <-  data %>% 
+  dplyr::select(c("ps_scalar_strata2", "NMainrecom_ord", var_ditch[1:6])) %>%       # adjust the number of panels
+  filter(ps_scalar_strata2 == stratum) %>%
+  dplyr::select(-ps_scalar_strata2) %>%
+  ggpairs(aes(col= NMainrecom_ord)) + theme_minimal() 
+
+fig2 <-  data %>% 
+    dplyr::select(c("ps_scalar_strata2", "NMainrecom_ord", var_ditch[7:13])) %>% 
+    filter(ps_scalar_strata2 == stratum) %>%
+    dplyr::select(-ps_scalar_strata2) %>%
+    ggpairs(aes(col= NMainrecom_ord)) + theme_minimal() 
+  
+fig3 <-  data %>% 
+    dplyr::select(c("ps_scalar_strata2", "NMainrecom_ord", var_multi)) %>% 
+    filter(ps_scalar_strata2 == stratum) %>%
+    dplyr::select(-ps_scalar_strata2) %>%
+    ggpairs(aes(col= NMainrecom_ord)) + theme_minimal() 
+
+fig_list <- list(fig1, fig2, fig3)
+}
+
+
+## plot all
+fig_ps_all <- function(stratum, data) {
+  
+fig1 <-  data %>% 
+  dplyr::select(c("ps_scalar_strata2", "NMainrecom_ord", var_all)) %>%       # adjust the number of panels
+  filter(ps_scalar_strata2 == stratum) %>%
+  dplyr::select(-ps_scalar_strata2) %>%
+  ggpairs(aes(col= NMainrecom_ord)) + theme_minimal() 
+
+fig_list <- list(fig1)
+}
+
+## show figures --- need to improve the efficiency, perhaps only keep the 1st row
+# stratum1 <- fig_ps("stratum1", df1_slice) 
+# stratum2 <- fig_ps("stratum2", df1_slice) 
+# stratum3 <- fig_ps("stratum3", df1_slice) 
+# stratum4 <- fig_ps("stratum4", df1_slice) 
+# stratum5 <- fig_ps("stratum5", df1_slice)
+
+# stratum1 <- fig_ps("str1", df1_slice)                                         # separate picture printing into 3 groups
+# stratum2 <- fig_ps("str2", df1_slice) 
+# stratum3 <- fig_ps("str3", df1_slice) 
+# stratum4 <- fig_ps("str4", df1_slice) 
+# stratum5 <- fig_ps("str5", df1_slice)
+
+stratum1_all <- fig_ps_all("str1", df1_slice)                                   # printing into 1 big group
+stratum2_all <- fig_ps_all("str2", df1_slice) 
+stratum3_all <- fig_ps_all("str3", df1_slice) 
+stratum4_all <- fig_ps_all("str4", df1_slice) 
+stratum5_all <- fig_ps_all("str5", df1_slice)
+
+## check whether PS helps balance covariate among treatment levels
+# stratum1[[1]]; stratum1[[2]]; stratum1[[3]];                                 # separate picture printing into 3 groups
+# stratum2[[1]]; stratum2[[2]]; stratum2[[3]];
+# stratum3[[1]]; stratum3[[2]]; stratum3[[3]];        
+# stratum4[[1]]; stratum4[[2]]; stratum4[[3]];
+# stratum5[[1]]; stratum5[[2]]; stratum5[[3]]
+
+stratum1_all; stratum2_all; stratum3_all; stratum4_all; stratum5_all           # printing into 1 big group
+```
+
+
+
+```{r strata_tables, echo=F, eval=F}
+list_tables <- lapply(1:5, function(i){                                 # stratum loop
+
+  stratum_i <- paste0("str", i)
+
+  stratum_i_df <- df1_slice %>%
+    filter(ps_scalar_strata2 == stratum_i) %>%
+    dplyr::select(all_of(var_all))
+
+
+  stratum_i_tables <- lapply(1:(length(stratum_i_df)-1), function(j){   # variable table loop
+
+    name_j <- names(stratum_i_df)[(j+1)]
+    data_i_j <- stratum_i_df %>%
+      dplyr::select(c("NMainrecom_ord", name_j)) %>%
+      mutate(NMainrecom_ord = fct_rev(NMainrecom_ord))                  # reverse factor order
+    names(data_i_j)[2] <- "a"                                           # create a substituting name
+    data_i_j %>% tabyl(NMainrecom_ord, a)
+
+  })
+
+  stratum_i_tables
+
+})
+```
+
+
+
+```{r strata_tables_output, echo=F}
+## save output
+# saveRDS(list_tables, paste0(mac, "list_tables.RDS"))
+# list_tables <- readRDS(paste0(mac, "list_tables.RDS"))
+sink(paste0(mac, "strata_tables.txt"));
+tables <- lapply(1:5, function(i){
+  
+  stratum_tables <- list_tables[[i]]
+  cat(paste0("\n\n------------ Stratum ", i, ": covar. | NMainrecom ------------"))
+  
+  lapply(1:(length(var_all)-1), function(j){
+    cat(c("\n\n[", j, "]: ", var_all[(j+1)], "\n\n"))
+    print(stratum_tables[[j]])
+  })
+  
+});
+sink()
+```
+
+
+
+```{r chisq_tests, echo=F}
+list_chisq_tests <- lapply(1:5, function(i){                                 # stratum loop
+
+  stratum_i <- paste0("str", i)
+
+  stratum_i_df <- df1_slice %>%
+    filter(ps_scalar_strata2 == stratum_i) %>%
+    dplyr::select(all_of(var_all))
+
+
+  stratum_i_chisq_tests <- lapply(1:(length(stratum_i_df)-1), function(j){   # variable table loop
+
+    name_j <- names(stratum_i_df)[(j+1)]
+    data_i_j <- stratum_i_df %>%
+      dplyr::select(c("NMainrecom_ord", name_j)) %>%
+      mutate(NMainrecom_ord = fct_rev(NMainrecom_ord))                  # reverse factor order
+    names(data_i_j)[2] <- "a"                                           # create a substituting name
+    data_i_j %>% 
+      tabyl(NMainrecom_ord, a) %>% 
+      chisq.test()
+
+  })
+
+  stratum_i_chisq_tests
+
+})
+```
+
+
+```{r strata_chisq_tests_output, echo=F}
+## save output
+# saveRDS(list_chisq_tests, paste0(mac, "list_chisq_tests.RDS"))
+# list_chisq_tests <- readRDS(paste0(mac, "list_chisq_tests.RDS"))
+sink(paste0(mac, "strata_chisq_tests.txt"));
+tests <- lapply(1:5, function(i){
+  
+  stratum_chisq_tests <- list_chisq_tests[[i]]
+  cat(paste0("\n\n------------ Stratum ", i, ": covar. | NMainrecom ------------"))
+  
+  lapply(1:(length(var_all)-1), function(j){
+    cat(c("\n\n[", j, "]: ", var_all[(j+1)], "\n\n"))
+    print(stratum_chisq_tests[[j]])
+  })
+  
+});
+sink()
+```

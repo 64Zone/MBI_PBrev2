@@ -1,0 +1,876 @@
+---
+title: "JCCP_v4_data"
+author: "SL"
+date: "8/10/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, echo = FALSE, dpi = 300, cache.lazy = FALSE, tidy = "styler", out.width = "90%", fig.align = "center", fig.width = 10, fig.asp = 0.618, error = F, warning = F)
+options(dplyr.print_min=Inf,
+        tibble.width=Inf, 
+        tibble.print_max=20,
+        max.print = 100000,
+        digits = 5, 
+        scipen=999999)
+
+rm(list=ls())
+set.seed(55555)
+library(metafor)
+library(robumeta)
+library(clubSandwich)  # for RVE with metafor
+library(tidyverse)
+library(weightr)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(gghalves)
+library(ggridges)
+library(ggExtra)
+library(GGally)        # plot data of continuous and categorical variables in matrix form
+library(hrbrthemes)    # fonts & background (e.g., dark mode)
+library(patchwork)     # multiple plots
+library(viridis)
+library(reshape2)
+library(cowplot)
+library(dplyr)
+library(janitor)
+library(lavaan)
+library(VIM)
+library(MASS)
+library(ggeffects)
+library(effects) 
+library(cowplot)
+library(weightr)
+library(rstatix)
+
+win <- "C:/Users/sliu/Box/"
+win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
+mac <- "/Users/sicongliu/Box Sync/" 
+mac_desktop <- "/Users/sicongliu/Desktop/"
+box_path <- "Zone/7_MBI_Database/JCCP_meta/JCCP_lib/Country_Data/"
+lib <- "C:/Users/Zone/Desktop/JCCP_lib/"
+lib_desktop <- "C:/Users/Zone/Desktop/"
+
+# my_path <- paste0(mac, box_path)
+my_path <- "~/Desktop/"
+my_path2 <- paste0(mac, "Zone/13_JCCP_meta/JCCP_lib/Country_Data/")
+new_data_path <- paste0(mac, "Zone/13_JCCP_meta/4_data_update/08092022/XLSX/")
+```
+
+
+```{r new_data_after_database_update}
+### ---------------------------- Caution in Using the Pipeline ---------------------------------
+# --- maintain consistency of downloading and labeling the XML files from database -------------
+# --- some files were put in 'stubs_removed folder' due to no contents (check in new files) ----
+# --- convert XML to XLSX instead of XLS that will result in data loss -------------------------
+# --- rm duplicates in Sheet 1 and 2 (3 is good by using full_join) ----------------------------
+# --- for sheet3_bind, write_csv must have arguement row.names = F to avoid error messages -----
+# in Cici's escal2d
+
+library(readxl)
+data.files <- list.files(path = new_data_path, pattern = ".xlsx")
+sheet1 <- lapply(data.files, function(x) read_xlsx(paste0(new_data_path, x), sheet = 1))
+sheet2 <- lapply(data.files, function(x) read_xlsx(paste0(new_data_path, x), sheet = 2))
+sheet3 <- lapply(data.files, function(x) read_xlsx(paste0(new_data_path, x), sheet = 3))
+
+### data structures in each sheet to check misalignment --------
+sink("~/Desktop/sheet3_select2.txt")
+lapply(1:length(data.files), function(i){
+  x <- sheet3[[i]]
+  print(data.files[i]); cat(paste0("seq. number is: ", i, "\n"))
+  print(dim(x))
+  colnames(x)
+})
+sink()
+
+### binding individual sheets --------
+## bind sheet 1 
+sheet1_name_criterion <- names(sheet1[[1]])
+lapply(sheet1, function(x){
+  sum(names(x) == sheet1_name_criterion)
+})
+sheet1_bind <- do.call(rbind, sheet1) %>% distinct(authyear...1, .keep_all = T) %>% rename(authyear = authyear...1)
+# write.csv(sheet1_bind, "~/Desktop/Sheet1_bind.csv")
+
+## bind sheet 2 
+# adjust var. number 
+# - I also updated database articles to avoid adding the following variables in R
+# which(data.files == "ASC8_9_2022.xls")             # 3 Harrison et al., 2010 (updated): "describe" "other" "scsioth1"
+# which(data.files == "COMMHIV8_9_2022.xls")         # 10 Kim et al., 2009 (updated): "other" "scsioth1"
+# which(data.files == "CONIPV8_9_2022.xls")          # 11 Kim et al., 2009 (updated): "other" "scsioth1"
+# which(data.files == "CONTBEH8_9_2022.xls")         # 13 Kim et al., 2009 (updated): "other" "scsioth1"
+# which(data.files == "CULAST8_9_2022.xls")          # 15 Kim et al., 2009 (updated): "other" "scsioth1"
+# which(data.files == "HIVRALLY8_9_2022.xls")        # 34 Kim et al., 2009 (updated): "other" "scsioth1"
+# which(data.files == "SHACOT8_9_2022.xls")          # 63 Robles et al., 2004 (updated): "other" "scsioth1"
+# diff_vars <- setdiff(names(sheet2[[1]]), names(sheet2[[63]]))       # check which variables are missing
+# which(names(sheet2[[1]]) %in% diff_vars)
+
+# adjust var. order
+sheet2_name_criterion <- names(sheet2[[2]])
+align_pattern <- sapply(sheet2, function(x){
+  count <- sum(names(x) == sheet2_name_criterion)
+  count
+})
+sheet_to_adjust <- align_pattern != 194
+
+# names(sheet2[[2]]); names(sheet2[[1]]); names(sheet2[[44]])         # 3 name patterns
+sheet2_adj <- list()
+for (i in 1:length(data.files)) {
+  if (i == 44) {                                                      # QUAENV8_9_2022.xls
+    sheet2_adj[[i]] <- sheet2[[i]] %>%
+    relocate(c(describe, other), .after = scome2)
+  }
+  else if(sheet_to_adjust[i] == 1) {
+    sheet2_adj[[i]] <- sheet2[[i]] %>%
+    relocate(other, .after = describe)
+  } 
+  else {
+    sheet2_adj[[i]] <- sheet2[[i]]
+  }
+}
+
+align_pattern2 <- sapply(sheet2_adj, function(x){
+  count <- sum(names(x) == sheet2_name_criterion)
+  count
+})
+sheet2_bind <- do.call(rbind, sheet2_adj) %>% distinct(authyear, record, .keep_all = T)
+# write.csv(sheet2_bind, "~/Desktop/Sheet2_bind.csv")
+
+## bind sheet 3
+# get stubs and adjust 
+stub_list <- gsub("8_9_2022.xlsx", "", data.files) %>% paste0(., "_") %>% as.list()
+stub_list[[which(data.files == "hadsex_TO_CARDFIT8_9_2022.xlsx")]] <- c("hadsex_", "healthserv_", "RO_", "AIP_", "waist_", "ABS-DA_", "TRIGL_", "CARDFIT_")
+stub_list[[which(data.files == "valuesbeh_SELF-CARE8_9_2022.xlsx")]] <- c("valuesbeh_", "Total7_", "SLEEP_", "QUAL_", "SELF-CARE_")
+stub_list[[which(data.files == "VIOL_SRRC_adoclin_pregtest8_9_2022.xlsx")]] <- c("VIOL_", "SRRC_", "adoclin_", "pregtest_")
+
+# select the targeted var_names
+for (u in 1:length(data.files)) {
+  sheet3[[u]] <- sheet3[[u]] %>%
+    dplyr::select(c("authyear", "record", starts_with(c(stub_list[[u]]), ignore.case = F)))
+}
+
+# merge files
+sheet3_bind <- sheet3[[1]]
+for (u in 2:length(data.files)) {
+  sheet3_bind <- sheet3_bind %>%
+    full_join(sheet3[[u]], by = c("authyear", "record"))
+}
+
+# correct suspicious cases suggested by 'fun_sus_JCCP.R'
+sheet3_bind[which(sheet3_bind$authyear == "Sanchez,2018 (Completed)" & 
+                    sheet3_bind$record == "G2") , "PH_len_n1_w1"] <- "0, 100"
+sheet3_bind[which(sheet3_bind$authyear == "Sanchez,2018 (Completed)" & 
+                    sheet3_bind$record == "G2"), "PH_len_n1_w2"] <- "0, 10"
+sheet3_bind[which(sheet3_bind$authyear == "Wechsberg et al. (2019) (Dolores)" & 
+                    sheet3_bind$record == "G1"), "CUSE_len_n1_w1"] <- "0, 100"
+sheet3_bind[which(sheet3_bind$authyear == "Wechsberg et al. (2019) (Dolores)" & 
+                    sheet3_bind$record == "G1"), "CUSE_len_n1_w3"] <- "0, 100"
+
+sheet3_bind[, c(setdiff(names(sheet3_old), names(sheet3_bind)))] <- NA         # add var names (this step is actually not necessary)
+# write.csv(sheet3_bind, "~/Desktop/Sheet3_bind.csv", row.names = F)           # row.names = T will result in errors in Fun_ES() in Cici's work
+
+
+### obtain aux variables from sheet3 ---------------------------------------------------------------
+## unique aux stubs
+aux_stub_list <- list()
+for (u in 1:length(data.files)) {
+  aux_stub_list[[u]] <- sheet3[[u]] %>%
+    dplyr::select(!starts_with(c(stub_list[[u]]), ignore.case = F) & contains("_aux_")) %>%
+    colnames() %>%
+    str_remove("aux_n\\d+_w\\d+") %>%
+    unique()
+}
+
+## aux data
+sheet3_aux <- list()
+for (u in 1:length(data.files)) {
+  sheet3_aux[[u]] <- sheet3[[u]] %>%
+    dplyr::select(c("authyear", "record", starts_with(c(aux_stub_list[[u]]), ignore.case = F)))
+}
+
+## aux variable names
+sheet3_aux_var_name <- list()
+for (u in 1:length(data.files)) {
+  sheet3_aux_var_name[[u]] <- sheet3[[u]] %>%
+    dplyr::select(c("authyear", "record", starts_with(c(aux_stub_list[[u]]), ignore.case = F))) %>%
+    colnames()
+}
+
+## verify selected variables are all aux variables
+# b <- unique(str_remove(str_remove(unique(unlist(sheet3_aux_var_name)), "_n\\d+_w\\d+"), "_\\w+"))      
+# b[order(b)]
+# unique_aux_var_name <- unique(unlist(sheet3_aux_var_name))
+
+FUN_var_update <- function(df_left, target_var, target_var_name) {
+  df_left <- df_left %>%
+    left_join(target_var, by = c("authyear", "record")) %>%
+    mutate(LALA = case_when(                             # dplyr dynamic var name  
+      is.na(get(paste0(target_var_name, ".x"))) & 
+        !is.na(get(paste0(target_var_name, ".y"))) ~ get(paste0(target_var_name, ".y")),
+      T ~ get(paste0(target_var_name, ".x"))
+    )) %>%
+    rename({{target_var_name}} := LALA) %>%              # by passing errors from mutate (that why LALA)
+    select(-c(paste0(target_var_name, ".x"), paste0(target_var_name, ".y")))
+  return(df_left)
+}
+
+
+authyear_record <- sheet3_bind %>% select(authyear, record)
+for (j in 1:length(sheet3_aux)) {
+  if(j == 1) {                             # 1st dataset
+    left <- authyear_record %>%
+      left_join(sheet3_aux[[j]], by = c("authyear", "record")) %>%
+      mutate(across(everything(), as.character))                      # bypass errors: logical (all NA)
+    next
+  }
+  
+  right <- sheet3_aux[[j]]
+  var_num <- ncol(right)-2             # aux var number
+  if(var_num == 0) {next}              # no aux var
+
+  for (i in 1:var_num) {               # aux var exist
+    target_var_name <- colnames(right)[i+2]
+    target_var <- right[c("authyear", "record", target_var_name)]
+    target_var <- target_var %>%
+      mutate(across(everything(), as.character))                     # bypass errors: logical (all NA)
+    
+    if(!target_var_name %in% colnames(left)){                        # target var not in data
+      left <- left %>%
+        left_join(target_var, by = c("authyear", "record"))
+    } else {                                                         # target var in data
+        left <- FUN_var_update(left, target_var, target_var_name)
+    }    # data updating loop
+  
+  }    # var loop
+
+}    # dataset loop
+
+## save and merge with Main outcomes
+# write_csv(left, "~/Desktop/sheet3_bind_aux.csv")
+sheet3_bind_MainAux <- sheet3_bind %>%
+  left_join(left, by = c("authyear", "record"))
+# write_csv(sheet3_bind_MainAux, "~/Desktop/Sheet3_bind_MainAux.csv")
+```
+
+
+```{r Describe_new_studies}
+## get the new study indices
+sheet1_old <- read_csv("~/Desktop/MBX_May2021_Sheet1.csv")
+sheet2_old <- read_csv("~/Desktop/MBX_May2021_Sheet2.csv") 
+sheet3_old <- read_csv("~/Desktop/MBX_May2021_Sheet3.csv")
+
+sheet1_bind <- read_csv("~/Desktop/Sheet1_bind.csv")
+sheet2_bind <- read_csv("~/Desktop/Sheet2_bind.csv")
+sheet3_bind <- read_csv("~/Desktop/Sheet3_bind.csv")
+
+old <- sheet3_old %>% dplyr::select(c(authyear, record)) %>% mutate(authyear_record = paste0(authyear, "_", record)) %>% dplyr::select(authyear_record)
+new <- sheet3_bind %>% dplyr::select(c(authyear, record)) %>% mutate(authyear_record = paste0(authyear, "_", record)) %>% dplyr::select(authyear_record)
+auth_record <- setdiff(new, old) %>% 
+  distinct(.) %>%
+  flatten_chr()
+  # write_csv("~/Desktop/new_authyear_record.csv")
+
+old_auth <- sheet3_old %>% dplyr::select(authyear) 
+new_auth <- sheet3_bind %>% dplyr::select(authyear)  
+auth <- setdiff(new_auth, old_auth) %>% 
+  distinct(.) %>%
+  flatten_chr()
+  # write_csv("~/Desktop/new_authyear.csv")
+
+## describe new studies
+new_articles <- sheet1_bind %>%
+  filter(authyear...1 %in% auth) 
+new_articles %>% write_csv("~/Desktop/new_article_headers_csv")
+sink("~/Desktop/new_article_area_partition.txt")
+cat("------- LS -------- \n")
+table(new_articles$GR1)
+cat("------- HIV -------- \n")
+table(new_articles$GR2)
+cat("------- AU/DU -------- \n")
+table(new_articles$GR3)
+sink()
+
+# setdiff(names(All), names(Old))
+# setdiff(old_study, all_study)
+```
+
+
+```{r clean_region_pubyr}
+Old <- read_csv("~/Desktop/HIV_WorkingFile.csv")
+All <- read_csv("~/Desktop/CompleteES_Aug2022.csv") %>%                                           # the dataset with all effect sizes
+  rename(authyear = authyear...1, record = record.x, INC = INC.x, 
+         PRPOS = PRPOS.x, GR1 = GR1.x, GR2 = GR2.x, GR3 = GR3.x) %>%
+  dplyr::select(-c(X.x, X.y, record.y, authyear...234, 
+                   INC.y, GR1.y, GR2.y, GR3.y, PRPOS.y))
+New <- read_csv("~/Desktop/new_authyear_edited2.csv")                                             # manually selected new studies from duplicates (Miller et al. switched from Dolores' to Angela's)
+
+old_study <- Old %>% 
+  dplyr::select(authyear) %>%
+  distinct(authyear) %>%
+  flatten_chr()
+new_study <- New %>%
+  filter(include == 1) %>% 
+  dplyr::select(authyear) %>%
+  flatten_chr()
+all_study <- All %>%
+  dplyr::select(authyear) %>%
+  distinct(authyear) %>%
+  flatten_chr()
+study_set <- union(old_study, new_study)
+
+# correct coding errors identified on 'country' variable
+All[which(All$authyear == "Go et al., 2015 (updated)"), "country"] <- "Vietnam"   
+All[which(All$authyear == "Burke et al. 2020 (updated)"), "country"] <- "South Africa" 
+All[which(All$authyear == "Feaster et al., 2010 (updated)"), "country"] <- "United States" 
+All[which(is.na(All$country)), "country"] <- All[which(is.na(All$country)), "countryj"]           # fill in NA rows (countryj is a better choice)
+# dat[which(is.na(dat$Country)), "Country"]
+
+dat <- All %>% 
+  filter(authyear %in% study_set & GR2 == 1) %>%                                                  # select HIV studies
+  rename(Country = country) %>%
+  mutate(NMainrecom = as.numeric(if_else(NMainrecom == "none", "-999", NMainrecom)),
+         NAUXrecomend = as.numeric(if_else(NAUXrecomend == "none", "-999", NAUXrecomend)),
+         Country = case_when(
+           Country == "-9999" ~ NA_character_,
+           Country == "Belgium, Italy, France, Germany, The Netherlands, Poland, Spain, England" ~ "Belgium_Italy_France_Germany_Netherlands_Poland_Spain_United Kingdom",
+           Country == "bulgaria" ~ "Bulgaria",
+           Country == "FRANCE" ~ "France",
+           Country == "Indian" ~ "India",
+           Country == "Namibia,Kenya,Tanzania" ~ "Namibia_Kenya_Tanzania",
+           Country == "Perú" ~ "Peru",
+           Country == "Russia, Bulgaria" ~ "Russia_Bulgaria",
+           Country == "South africa" ~ "South Africa",
+           Country == "Sto Domingo" ~ "Dominican Republic",
+           Country %in% c("Taiwan, China", "Taiwan") ~ "Taiwan",
+           Country == "Tajikistan-Russia" ~ "Tajikistan_Russia",
+           Country %in% c("U.S", "U.S.", "US", "usa", "Usa", "USA", "United States of America") ~ "United States",
+           Country == "USAThailand" ~ "United States_Thailand",
+           Country == "UK" ~ "United Kingdom",
+           Country == "zimbabwe" ~ "Zimbabwe",
+           Country == "Swizerland" ~ "Switzerland",
+           T ~ Country
+         )
+         ) %>%
+  naniar::replace_with_na_all(condition = ~.x < -950)                                          # replace -999 or -9999 with NA
+
+region_label <- dat %>% distinct(Country) %>% flatten_chr() %>% str_sort()
+region_label <- c(region_label, "Namibia", "Tajikistan", "Belgium", "Italy", "Germany", "Netherlands", "Poland", "Spain") %>% str_sort()                        # add unique regions from the composite samples
+
+# dat_old %>% dplyr::select(Country) %>% distinct(Country) %>% flatten_chr() %>% sort(); 
+# dat %>% dplyr::select(Country) %>% distinct(Country) %>% flatten_chr() %>% sort()
+# All %>% dplyr::select(country) %>% distinct(country) %>% flatten_chr() %>% sort()
+
+# filling pubyear & Country
+# dat[which(is.na(dat$pubyear)),]
+dat$pubyear[which(dat$authyear == "Andersson, 2020 - 2/2 (Sally week 25)")] <- 2020
+dat$pubyear[which(dat$authyear == "Baird, Garfein, McIntosh & Ozler, 2012 (updated)")] <- 2012
+dat$pubyear[which(dat$authyear == "Cade et al., 2010 (rev.)")] <- 2010
+dat$pubyear[which(dat$authyear == "Cianelli et al., 2012 (updated)")] <- 2012
+dat$pubyear[which(dat$authyear == "da Silveira & dos Santos, 2006 (updated)")] <- 2006
+dat$pubyear[which(dat$authyear == "Fogel et al., 2015 (updated)")] <- 2015
+dat$pubyear[which(dat$authyear == "Grimley & Hook, 2009 (updated)")] <- 2009
+dat$pubyear[which(dat$authyear == "Koblin et al., 2004 (updated)")] <- 2004
+dat$pubyear[which(dat$authyear == "Latkin et al., 2008 (updated)")] <- 2008
+dat$pubyear[which(dat$authyear == "Lewis et al., 2015 (updated)DUPLICATED")] <- 2015
+dat$pubyear[which(dat$authyear == "Mimiaga et al. (2019b) - Zone wk23")] <- 2019
+dat$pubyear[which(dat$authyear == "Peragallo, Gonzalez-Guarda, McCabe & Cianelli, 2012 (updated)")] <- 2012
+dat$pubyear[which(dat$authyear == "Wawer et al., 2009 (updated)")] <- 2009
+
+# write_csv(dat, paste0(my_path2, "HIV_WorkingFile_Aug2022_region_pubyr2.csv"))
+# write_csv(as.tibble(region_label), paste0(my_path2, "region_label_Aug2022.csv"))
+```
+
+
+```{r preproc_Ben}
+# dat_old <- read_csv("~/Desktop/HIV_WorkingFile.csv")
+dat <- read_csv(paste0(my_path2, "HIV_WorkingFile_Aug2022_region_pubyr2.csv")) 
+
+## impute rec_num                                                   # we may want to check the articles instead of using 0s
+dat$NAUXrecomend[is.na(dat$NAUXrecomend)] <- 0
+dat$NMainrecom[is.na(dat$NMainrecom)] <- 0
+dat$totalrec <- 0
+dat$totalrec <- dat$NMainrecom + dat$NAUXrecomend
+
+### -----------------------------------------------------------------------------------------------------
+## Ben's grouping
+dat$group <- 0
+dat$group[dat$totalrec == 1] <- 1
+dat$group[dat$totalrec > 1] <- 2
+dat$group <- factor(dat$group,levels=c(0,1,2),labels=c("WLC","AC","MBI"))
+
+## My grouping
+dat$group2 <- 0
+dat$group2[dat$NMainrecom == 1] <- 1
+dat$group2[dat$NMainrecom > 1] <- 2
+dat$group2 <- factor(dat$group2, levels=c(0,1,2), labels=c("WLC","AC","MBI"))
+### -----------------------------------------------------------------------------------------------------
+
+dat$mainoutcome <- 0                                     # outcomes directly related to HIV
+dat$mainoutcome[dat$varname == "CUSE"] <- 1              # Condom Use/Unprotected Sex
+dat$mainoutcome[dat$varname == "CONPRO"] <- 1            # Condom-protected intercourse
+dat$mainoutcome[dat$varname == "HIVA"] <- 1              # HIV Adherence
+dat$mainoutcome[dat$varname == "MA"] <- 1                # Medication Adherence
+dat$mainoutcome[dat$varname == "VLOAD"] <- 1             # Viral Load
+dat$mainoutcome[dat$varname == "HIVT"] <- 1              # HIV Testing
+dat$mainoutcome[dat$varname == "RISEXBEH"] <- 1          # Risk sexual behavior
+dat$mainoutcome[dat$varname == "SEX"] <- 1               # sex
+dat$mainoutcome[dat$varname == "SEXC"] <- 1              # Contraception (other than condoms)
+dat$mainoutcome[dat$varname == "SEXD"] <- 1              # Sex for Drugs
+dat$mainoutcome[dat$varname == "SEXDR"] <- 1             # Sex and Drinking
+dat$mainoutcome[dat$varname == "SEXM"] <- 1              # Sex for Money
+dat$mainoutcome[dat$varname == "STIT"] <- 1              # STI Testing
+dat$mainoutcome[dat$varname == "STIR"] <- 1              # STI Rates
+
+dat$csrpeer[is.na(dat$csrpeer)] <- 0
+dat$csrpeer[dat$csrpeer == 2] <- 1
+dat$csrpeer <- factor(dat$csrpeer, levels = c(0,1), labels = c("N","Y"))
+
+dat$expertsource <- 0
+dat$expertsource[dat$scsi == 3] <- 1                     # 3. public health educator 
+dat$expertsource[dat$scsi == 6] <- 1                     # 6. doctor/nurse 
+dat$expertsource[dat$scsi == 13] <- 1                    # 13. medical students
+dat$expertsource[dat$scsi == 14] <- 1                    # 14. clinical psychologist
+
+dat$clinic <- 0
+dat$clinic[dat$DELVR == 2] <-1                           # 2. health clinic 
+dat$clinic <- factor(dat$clinic, levels = c(0,1), labels = c("noclinic","clinic"))
+
+dat$GRPINDJ3T <- factor(dat$GRPINDJ3T, levels = c(0,1,2), labels = c("Group","Individual","Both"))
+
+dat$individual <- 0
+dat$individual[dat$GRPINDJ3T == "Individual"] <- 1
+
+dat$motivation <- 0
+dat$scaa[is.na(dat$scaa)] <- 0
+dat$scai[is.na(dat$scai)] <- 0
+dat$scna[is.na(dat$scna)] <- 0
+dat$scta[is.na(dat$scta)] <- 0
+dat$scmi[is.na(dat$scmi)] <- 0
+dat$motivation <- rowMeans(dat[, c("scaa","scna","scta","scmi")], na.rm = TRUE)
+
+dat$scas[is.na(dat$scas)] <- 0
+dat$scbar[is.na(dat$scbar)] <- 0
+dat$sctime[is.na(dat$sctime)] <- 0
+dat$scsm[is.na(dat$scsm)] <- 0
+dat$scmss[is.na(dat$scmss)] <- 0
+dat$scmss[is.na(dat$scmss == ".")] <- NA
+
+dat$recruit <- 0                                                                           # where are participants recruited from ?
+dat$recruit[dat$RECRUIT == 1] <- 1                                                         # 1. drug treatment 
+dat$recruit[dat$RECRUIT == 3] <- 1                                                         # 3. hospital/health clinic
+dat$recruit <- factor(dat$recruit, levels = c(0,1), labels = c("Non-Medical","Medical"))
+
+dat$ftf <- 0                                                                               # ftf ?
+dat$ftf[dat$CTXT == 3] <- 1                                                                # dominant comm. context
+dat$ftf <- factor(dat$ftf, levels = c(0,1), labels = c("Non-FTF","FTF"))
+
+# items <- c("HIGHSCHOOLsi", "gaybi", "BLACKsi", "color", "HISPsi")                        # which(names(dat) %in% items): 132 138 147 (no "color" "gaybi [Ben: RCPTG - gaybi]")
+# items2 <- c("csrpeer", "CULTURE", "dv", "expertsource", "color")                         # 29  71 212 238
+# items3 <- c("dv", "SELFSEL", "clinic", "individual", "expertsource")                     # 29  79 238 239 240
+# cor(dat[, items], use = "p")                                                             # does not run
+# cor(dat[, items3], use = "p")                                                            # does not run
+
+# dat$dlog <- log(5+dat$d)                                                                 # what are reasons of trans.?
+# dat$dvlog <- log(dat$dv)
+
+# dat %>% summarize(mean = mean(AGMNsi, na.rm=TRUE), sd = sd(AGMNsi, na.rm=TRUE))          # 32.68864 (11.19437)
+# dat %>% summarize(mean = mean(WHITEsi, na.rm=TRUE), sd = sd(WHITEsi, na.rm=TRUE))        # 26.2 (23.34)
+# dat %>% summarize(mean = mean(BLACKsi, na.rm=TRUE), sd = sd(BLACKsi, na.rm=TRUE))        # 45.51778 (32.46741)
+# dat %>% summarize(mean = mean(HISPsi, na.rm=TRUE), sd = sd(HISPsi, na.rm=TRUE))          # 21.65, (23.4)
+# dat %>% summarize(mean = mean(gaybi, na.rm=TRUE), sd = sd(gaybi, na.rm=TRUE))            # 20.22 (34.80)         no 'gaybi' !!!
+# dat %>% summarize(mean = mean(NMainrecom, na.rm=TRUE), sd = sd(NMainrecom, na.rm=TRUE))  # 1.7194	(1.3115)
+
+dat$sqrrec <- (dat$totalrec)^2
+dat$logrec <- log(1+dat$totalrec)
+dat$logsqrrec <- (dat$logrec)^2
+# dat$logPGDP <- log(dat$PGDP)
+# dat$logGDP <- log(dat$GDP)
+
+# dat_aux <- read.csv("AuxOutcomes.csv")                                             # I do not have this spreadsheet !!!
+# dat_aux2 <- semi_join(dat_aux, dat, by = c("authyear","record"))                   # I do not have this spreadsheet !!!
+# dat_aux3 <- left_join(dat_aux2, dat, by = c("authyear","record"))                  # I do not have this spreadsheet !!!
+# aux4 <- dat_aux3[!duplicated(dat_aux3$d.x), ]                                      # I do not have this spreadsheet !!!
+
+# alloutcomes <- dat
+# mainoutcomes <- dat[which(dat$mainoutcome == 1), ]
+# auxoutcome <- dat[which(dat$mainoutcome == 0), ]
+
+dat$MBI <- 0
+dat$MBI[dat$group == "MBI"] <- 1
+dat$MBI <- factor(dat$MBI, levels = c(0,1), labels = c("Control","MBI"))
+# datall <- dat
+
+## create modified measure of precision for Egger Sandwich test
+dat <- dat %>%
+        mutate(W = 2/sqrt(N), W_sqrt = sqrt(W),                   # see Pustejovsky18, p. 59 for the formula
+               rowID = row_number(),                              # create row ID for CHE approach
+               group = fct_relevel(group, "MBI"),
+               US = case_when(
+                 Country == "United States" ~ "US",
+                 TRUE ~ "Non-US"
+               ))
+# write_csv(dat, paste0(my_path2, "processed_data_ZoneGrouping_Aug2022.csv"))        # group - my method
+# write_csv(dat, paste0(my_path2, "processed_data_TwoGrouping_Aug2022_2.csv"))         # group - Ben's method; group2 - mine
+```
+
+
+```{r load_processed_data}
+dat <- read_csv(paste0(my_path2, "processed_data_TwoGrouping_Aug2022_2.csv")) 
+region_label <- read_csv(paste0(my_path2, "region_label_Aug2022.csv")) %>% flatten_chr()
+
+## create data frames
+dat_NoUS <- dat %>% filter(Country != "United States")
+dat_US <- dat %>% filter(Country == "United States")
+dat_main <- dat %>% filter(mainoutcome == 1)
+dat_NoUS_main <- dat %>% filter(Country != "United States" & mainoutcome == 1)
+dat_US_main <- dat %>% filter(Country == "United States" & mainoutcome == 1)
+```
+
+
+```{r region_data}
+## raw data
+GDP <- read_csv(paste0(my_path2, "GDP.csv"), skip = 4)
+GDP_p3 <- read_csv(paste0(my_path2, "GDP_PPP.csv"), skip = 4)
+GDP_pc <- read_csv(paste0(my_path2, "GDP_per_capita.csv"), skip = 4)
+GDP_pc_p3 <- read_csv(paste0(my_path2, "GDP_per_capita_PPP.csv"), skip = 4)
+GINI <- read_csv(paste0(my_path2, "GINI.csv"), skip = 4)
+
+## process GDPs, GINI - World Bank data
+GDP_GINI_proc_fun <- function(region_data) {                                                  
+  var_2_rm <- c("Country Code", "Indicator Code", "Indicator Name")
+  region_data %>%
+    dplyr::select(-all_of(var_2_rm)) %>%
+    rename(region = `Country Name`) %>%
+    mutate(region = case_when(
+      region == "Russian Federation" ~ "Russia",
+      TRUE ~ region
+    )) %>%
+    filter(region %in% region_label) %>%
+    arrange(region) %>%
+    pivot_longer(cols = c(-region), names_to = "year") %>%                               # value var.
+    mutate(year = as.numeric(year))
+}
+
+GDP2 <- GDP_GINI_proc_fun(GDP)
+GDP2_p3 <- GDP_GINI_proc_fun(GDP_p3)
+GDP2_pc <- GDP_GINI_proc_fun(GDP_pc)
+GDP2_pc_p3 <- GDP_GINI_proc_fun(GDP_pc_p3)
+GINI2 <- GDP_GINI_proc_fun(GINI)
+# GDP2$region; region_label                                                              # only missing Taiwan
+
+## HDI - UN Human Development Report data
+HDI <- read_csv(paste0(my_path2, "HDI.csv"), skip = 0)
+HDI2 <- HDI %>%
+  rename(region = `Country`) %>%
+  mutate(region = case_when(
+    region == "Russian Federation" ~ "Russia",
+    region == "Tanzania (United Republic of)" ~ "Tanzania",
+    region == "Viet Nam" ~ "Vietnam",
+    TRUE ~ region
+  )) %>%
+  filter(region %in% region_label) %>%
+  arrange(region) %>%
+  pivot_longer(cols = c(-region), names_to = "year") %>%
+    mutate(year = as.numeric(year))
+# GDP2$region; HDI2$region                                                               # only missing Taiwan
+
+## HAQI - https://ourworldindata.org/grapher/healthcare-access-and-quality-index?msclkid=a9585530aae011ec8ad12063999fe612 
+HAQI <- read_csv(paste0(my_path2, "HAQI.csv"), skip = 0)
+HAQI2 <- HAQI %>%
+  rename(region = `Entity`, 
+         year = Year,
+         value = `HAQ Index (IHME (2017))`) %>%
+  dplyr::select(-Code) %>%
+  mutate(region = case_when(
+    region == "Russian Federation" ~ "Russia",
+    TRUE ~ region
+  )) %>%
+  filter(region %in% region_label) %>%
+  arrange(region) %>%
+    mutate(year = as.numeric(year))
+# GDP2$region; HAQI2 %>% distinct(region) %>% flatten_chr()                              # it has all (including Taiwan) 
+```
+
+
+```{r region_model}
+## simple regression model function 
+linear_model <- function(df) {
+  lm(value ~ year, data = df)
+}
+
+## region stats model function
+region_model_fun <- function(region_data) {
+  
+  var_summary <- c("region", "r.squared", "adj.r.squared", "sigma", "statistic", "p.value",        # overall model summary stats
+                   "df", "logLik", "AIC", "BIC", "deviance", "df.residual", "nobs")
+  var_coef <- c("region", "term", "estimate", "std.error", "statistic1", "p.value1")               # model coefficient stats
+  
+  region_results <- region_data %>%
+    group_by(region) %>%
+    nest() %>%
+    mutate(linear_result = map(data, linear_model),
+           linear_glance = map(linear_result, broom::glance),
+           linear_tidy = map(linear_result, broom::tidy)) %>%
+    dplyr::select(-c(data, linear_result)) %>%
+    unnest()
+  
+  region_results_summary <- region_results %>%                                                     # save summary stats
+    dplyr::select(var_summary) %>%
+    distinct(region, .keep_all = T)
+  
+  region_results_intercept <- region_results %>%                                                   # save intercept stats 
+    dplyr::select(var_coef) %>%
+    filter(term == "(Intercept)") %>%
+    dplyr::select(-term) %>%
+    rename_with(~ paste0("intercept_", .x)) %>%
+    rename(region = intercept_region)
+  
+  region_results_slope <- region_results %>%                                                       # save slope stats
+    dplyr::select(var_coef) %>%
+    filter(term == "year") %>%
+    dplyr::select(-term) %>%
+    rename_with(~ paste0("year_", .x)) %>%
+    rename(region = year_region)
+  
+  region_results_final <- region_results_summary %>%                                               # merge 
+    left_join(region_results_intercept, by = "region") %>%
+    left_join(region_results_slope, by = "region")
+  
+  region_results_final
+}
+
+## get the models
+model_GDP <- region_model_fun(GDP2) %>% mutate(index = "GDP")
+model_GDP_p3 <- region_model_fun(GDP2_p3) %>% mutate(index = "GDP_p3")
+model_GDP_pc <- region_model_fun(GDP2_pc) %>% mutate(index = "GDP_pc")
+model_GDP_pc_p3 <- region_model_fun(GDP2_pc_p3) %>% mutate(index = "GDP_pc_p3")
+model_GINI <- region_model_fun(GINI2) %>% mutate(index = "GINI")                                   # R2's are low - may use mean for those very low R2 regions
+model_HDI <- region_model_fun(HDI2) %>% mutate(index = "HDI")
+model_HAQI <- region_model_fun(HAQI2) %>% mutate(index = "HAQI")
+
+## combine all model outputs together
+model_df <- model_GDP %>%
+  bind_rows(model_GDP_p3) %>%
+  bind_rows(model_GDP_pc) %>%
+  bind_rows(model_GDP_pc_p3) %>%
+  bind_rows(model_GINI) %>%
+  bind_rows(model_HDI) %>%
+  bind_rows(model_HAQI)
+```
+
+
+```{r visual_model_fit, fig.width=8}
+# GINI looks bad (low R2 suggests linear model does not fit better than a constant perhaps due to fluctuation of data points) 
+# GDPs look worse then GDP_p3's
+model_df %>%
+  ggplot(aes(x=r.squared, y = index, fill = factor(stat(quantile)))) +
+  stat_density_ridges(geom = "density_ridges_gradient", calc_ecdf = TRUE, 
+                      quantile_lines = TRUE, jittered_points = TRUE, position = "raincloud", alpha = 0.5, scale = 0.7) +
+  scale_fill_viridis_d(name = "Quartiles", alpha = 0.9) +
+  theme_minimal()
+
+model_df %>% filter(index == "GDP") %>% ungroup() %>% get_summary_stats(r.squared)    # .818
+model_df %>% filter(index == "GDP_pc") %>% ungroup() %>% get_summary_stats(r.squared) # .804
+model_df %>% filter(index == "HDI") %>% ungroup() %>% get_summary_stats(r.squared)    # .933  (mean of the three .852)
+```
+
+
+```{r estimate_region_indices}
+## get needed vars.
+dat_time <- dat %>%
+  distinct(authyear, .keep_all = T) %>%
+  dplyr::select(authyear, studyyearbeg, studyyearend, pubyear, Country) %>%
+  rename(region = Country) %>% 
+  mutate(across(where(is.numeric), ~ replace(.x, .x == -9999, NA))) %>%
+  mutate(studyyearmid = (studyyearbeg + studyyearend)/2,                                          # the mid-year point of the intervention
+         mid_2_pub = pubyear - studyyearmid,                                                      # duration from mid-year to pubyear
+         pubyear2 = as.numeric(str_extract(authyear, "[[:digit:]]{4}")))                          # bc' missing values in pubyear                       
+
+## results 
+# dat_time %>% dplyr::select(-c(authyear, region)) %>% ggpairs(); aggr(dat_time); summary(dat_time) # median(mid_2_pub) = 4.5 years
+
+## correct incorrect 'pubyear' coding  -  use pubyear2 !!!
+dat_time[which(dat_time$authyear == "Reback et al., 2010 (updated)"), ]$pubyear <- 2010       
+dat_time[which(dat_time$authyear == "Barnett et al., 2009 (updated)"), ]$pubyear <- 2009
+
+## create estimate of when study happened - 'anchoryear' 
+dat_time <- dat_time %>%
+  mutate(anchoryear = case_when(
+    is.na(studyyearmid) ~ pubyear2 - 4.5,                                                         # median(mid_2_pub) = 4.5 years
+    TRUE ~ studyyearmid))
+
+## histogram based on almost each year
+# hist(dat_time$anchoryear, breaks = 30)
+
+## cross-region studies
+# Amirkhanian et al., 2005 (updated): unclear (p. 1899)                             -  Russia_Bulgaria        2003.5
+Amirkahanian <- dat_time %>%
+  slice(which(authyear == "Amirkhanian et al., 2005 (updated)")) %>%
+  separate(region, c("region1", "region2"), "_") %>%
+  pivot_longer(c("region1", "region2"), values_to = "region") %>% 
+  dplyr::select(-name) %>%
+  relocate(region, .before = studyyearmid) %>% 
+  mutate(authyear = paste0(authyear, region))
+# Bachanas et al., 2016: clustered rand. w/ equal number from each region (p.2111)  -  Namibia_Kenya_Tanzania 2011.5
+Bachanas <- dat_time %>%
+  slice(which(authyear == "Bachanas et al., 2016")) %>%
+  separate(region, c("region1", "region2", "region3"), "_") %>%
+  pivot_longer(c("region1", "region2", "region3"), values_to = "region") %>% 
+  dplyr::select(-name) %>%
+  relocate(region, .before = studyyearmid) %>% 
+  mutate(authyear = paste0(authyear, region))
+# Bahromov & Weine, 2011 (updated): unclear (p. 270)                                -  Russia_Tajikistan      2006.5
+Bahromov <- dat_time %>%
+  slice(which(authyear == "Bahromov & Weine, 2011 (updated)")) %>%
+  separate(region, c("region1", "region2"), "_") %>%
+  pivot_longer(c("region1", "region2"), values_to = "region") %>% 
+  dplyr::select(-name) %>%
+  relocate(region, .before = studyyearmid) %>% 
+  mutate(authyear = paste0(authyear, region))
+# Latkin et al., 2008 (updated) (Table 1, p. 744)                                   -  United States(696)_Thailand(427) 2004
+Latkin <- dat_time %>%
+  slice(which(authyear == "Latkin et al., 2008 (updated)")) %>%
+  separate(region, c("region1", "region2"), "_") %>%
+  pivot_longer(c("region1", "region2"), values_to = "region") %>% 
+  dplyr::select(-name) %>%
+  relocate(region, .before = studyyearmid) %>% 
+  mutate(authyear = paste0(authyear, region))
+# Nostlinger et al., 2016 (updated)                                                - Belgium_Italy_France_Germany_Netherlands_Poland_Spain_England 2012 
+Nostlinger <- dat_time %>%
+  slice(which(authyear == "Nostlinger et al., 2016 (updated)")) %>%
+  separate(region, c("region1", "region2", "region3", "region4", 
+                     "region5", "region6", "region7", "region8"), "_") %>%
+  pivot_longer(c("region1", "region2", "region3", "region4", 
+                  "region5", "region6", "region7", "region8"), values_to = "region") %>% 
+  dplyr::select(-name) %>%
+  relocate(region, .before = studyyearmid) %>% 
+  mutate(authyear = paste0(authyear, region))
+
+# check & bind
+# sapply(list(dat_time, Bachanas, Amirkahanian, Bahromov, Latkin), names)
+dat_time <- dat_time %>%
+  bind_rows(Bachanas) %>%
+  bind_rows(Amirkahanian) %>%
+  bind_rows(Bahromov) %>%
+  bind_rows(Latkin) %>%
+  bind_rows(Nostlinger)
+
+
+## model prediction fun
+region_prediction_fun <- function(df, index_name) {
+  
+  model_info <- model_df %>%                                                            # get needed model info
+    filter(index == index_name) %>%
+    dplyr::select(region, intercept_estimate, year_estimate)
+  
+  df <- df %>% 
+    left_join(model_info, by = "region") %>%
+    mutate(index_name = intercept_estimate + year_estimate * anchoryear) %>%            # get prediction 
+    dplyr::select(-c(intercept_estimate, year_estimate))
+
+  df  
+  
+}
+
+## add model prediction values
+est_GDP <- region_prediction_fun(dat_time, "GDP") %>% rename(GDP = index_name) %>% dplyr::select(authyear, GDP)
+est_GDP_p3 <- region_prediction_fun(dat_time, "GDP_p3") %>% rename(GDP_p3 = index_name) %>% dplyr::select(authyear, GDP_p3)
+est_GDP_pc <- region_prediction_fun(dat_time, "GDP_pc") %>% rename(GDP_pc = index_name) %>% dplyr::select(authyear, GDP_pc)
+est_GDP_pc_p3 <- region_prediction_fun(dat_time, "GDP_pc_p3") %>% rename(GDP_pc_p3 = index_name) %>% dplyr::select(authyear, GDP_pc_p3)
+est_GINI <- region_prediction_fun(dat_time, "GINI") %>% rename(GINI = index_name) %>% dplyr::select(authyear, GINI)
+est_HDI <- region_prediction_fun(dat_time, "HDI") %>% rename(HDI = index_name) %>% dplyr::select(authyear, HDI)
+est_HAQI <- region_prediction_fun(dat_time, "HAQI") %>% rename(HAQI = index_name) %>% dplyr::select(authyear, HAQI)
+
+# bind
+dat_est <- dat_time %>%
+  dplyr::select(authyear, region, anchoryear) %>%
+  left_join(est_GDP, by = "authyear") %>%
+  left_join(est_GDP_p3, by = "authyear") %>%
+  left_join(est_GDP_pc, by = "authyear") %>%
+  left_join(est_GDP_pc_p3, by = "authyear") %>%
+  left_join(est_GINI, by = "authyear") %>%                                                  # reminder: GINI model does not fit well
+  left_join(est_HDI, by = "authyear") %>%  
+  left_join(est_HAQI, by = "authyear") 
+
+# Taiwan study
+# Lau, Tsui, Cheng & Pang, 2010 (updated)                                           -  Taiwan                 2005.5
+# Chiou et al., 2006 (updated)                                                      -  Taiwan                 2002.5
+Taiwan_GDP <- tibble(
+                     GDP = c(307.4e9, 317.4e9, 374.1e9, 386.5e9),                                  # GDP - https://en.wikipedia.org/wiki/Economy_of_Taiwan
+                     GDP_p3 = c(516.3e9, 548.8e9, 655e9, 714.2e9),                                 # GDP_p3 (year 2002, 2003, 2005, 2006) 
+                     GDP_pc = c(13651.4, 14040.6, 16427.5, 16892.9),                               # GDP_pc
+                     GDP_pc_p3 = c(22927.3, 24277.2, 28767.3, 31220.7),                            # GDP_pc_p3
+                     GINI = c(27.3, 27.3, 27.3, 27.3),                                             # GINI: avg. value from measuring Lin07TaiwanGINI
+                     HDI = c(.902, .909, .922, .930),                                              # HDI https://web.archive.org/web/20170811222036/http://eng.stat.gov.tw/public/data/dgbas03/bs2/gender/International%20Gender/人類發展指數.xls
+                     HAQI = c(71.567, 71.567, 71.567, 71.567)                                      # HAQI (copied the modeled values)
+                     )     
+Taiwan_GDP0203 <- Taiwan_GDP %>% slice(1:2) 
+Taiwan_GDP0506 <- Taiwan_GDP %>% slice(3:4) 
+dat_est[which(dat_est$authyear == "Chiou et al., 2006 (updated)"), 4:ncol(dat_est)] <- lapply(Taiwan_GDP0203, mean)
+dat_est[which(dat_est$authyear == "Lau, Tsui, Cheng & Pang, 2010 (updated)"), 4:ncol(dat_est)] <- lapply(Taiwan_GDP0506, mean)
+
+# transformations: original range GINI/100 [.27, .64], HDI [.41, .92], HAQI/100 [.37, .89]
+dat_est <- dat_est %>%
+  mutate(
+         log_GDP = log(GDP),                                                                # log
+         log_GDP_p3 = log(GDP_p3),
+         log_GDP_pc = log(GDP_pc),
+         log_GDP_pc_p3 = log(GDP_pc_p3),
+
+         logit_GINI = qlogis(GINI/100),                                                     # logit - logistic dist. quantile fun.
+         logit_HDI = qlogis(HDI),
+         logit_HAQI = qlogis(HAQI/100)
+         )
+
+## synthesize cross-region studies (check row numbers when updating data!)
+dat_est[which(dat_est$authyear == "Amirkhanian et al., 2005 (updated)"), 4:ncol(dat_est)] <- lapply(dat_est[152:153, 4:ncol(dat_est)], mean)
+dat_est[which(dat_est$authyear == "Bachanas et al., 2016"), 4:ncol(dat_est)] <- lapply(dat_est[149:151, 4:ncol(dat_est)], mean)
+dat_est[which(dat_est$authyear == "Bahromov & Weine, 2011 (updated)"), 4:ncol(dat_est)] <- lapply(dat_est[154:155, 4:ncol(dat_est)], mean)
+dat_est[which(dat_est$authyear == "Latkin et al., 2008 (updated)"), 4:ncol(dat_est)] <- 
+  (696 * as.vector(dat_est[156, 4:ncol(dat_est)]) + 467 * as.vector(dat_est[157, 4:ncol(dat_est)])) / (696 + 467)  # weighted based on sample
+dat_est[which(dat_est$authyear == "Nostlinger et al., 2016 (updated)"), 4:ncol(dat_est)] <- lapply(dat_est[158:165, 4:ncol(dat_est)], mean, na.rm=T)
+# write_csv(dat_est, "~/Desktop/region_indices.csv")
+
+## remove rows
+dat_est <- dat_est %>%
+  slice(-c(149:165)) %>%                                                                   # pseudo rows for cross-region studies 
+  dplyr::select(-anchoryear)
+
+## add rank version
+dat_est_rank <- dat_est %>%  
+  mutate(across(where(is.numeric), ~ dense_rank(desc(.)))) %>%                             # higher rank for larger number
+  dplyr::select(where(is.numeric)) %>%
+  rename_with(~ paste0("r_", .)) 
+dat_est <- dat_est %>%
+  bind_cols(dat_est_rank)
+
+## save the processed region data
+# write_csv(dat_est, paste0(my_path2, "region_data_Aug2022_2.csv"))
+```
+
+
+```{r visualize_region_data, fig.width=8}
+dat_est <- read_csv(paste0(my_path2, "region_data_Aug2022_2.csv"))
+
+## study level pairs - collinearity issue
+dat_est %>% dplyr::select(c(GDP, GDP_p3, GDP_pc, GDP_pc_p3, GINI, HDI, HAQI)) %>% ggpairs(
+  lower = list(continuous = wrap("points", alpha = 0.3, size=0.4))) 
+dat_est %>% dplyr::select(c(log_GDP, log_GDP_p3, log_GDP_pc, log_GDP_pc_p3, logit_GINI, logit_HDI, logit_HAQI)) %>% ggpairs(
+   lower = list(continuous = wrap("points", alpha = 0.3, size=0.4)))
+
+## region level pairs
+dat_est %>% distinct(region, .keep_all = T) %>% dplyr::select(c(GDP, GDP_p3, GDP_pc, GDP_pc_p3, GINI, HDI, HAQI)) %>% ggpairs(
+  lower = list(continuous = wrap("points", alpha = 0.3, size=0.4))); 
+dat_est %>% distinct(region, .keep_all = T) %>% dplyr::select(c(log_GDP, log_GDP_p3, log_GDP_pc, log_GDP_pc_p3, logit_GINI, logit_HDI, logit_HAQI)) %>% ggpairs(lower = list(continuous = wrap("points", alpha = 0.3, size=0.4)))
+
+## (rank) study level pairs - collinearity issue
+dat_est %>% dplyr::select(c(r_GDP, r_GDP_p3, r_GDP_pc, r_GDP_pc_p3, r_GINI, r_HDI, r_HAQI)) %>% ggpairs(
+  lower = list(continuous = wrap("points", alpha = 0.3, size=0.4))) 
+dat_est %>% dplyr::select(c(r_log_GDP, r_log_GDP_p3, r_log_GDP_pc, r_log_GDP_pc_p3, r_logit_GINI, r_logit_HDI, r_logit_HAQI)) %>% ggpairs(lower = list(continuous = wrap("points", alpha = 0.3, size=0.4)))
+
+## (rank) region level pairs
+dat_est %>% distinct(region, .keep_all = T) %>% dplyr::select(c(r_GDP, r_GDP_p3, r_GDP_pc, r_GDP_pc_p3, r_GINI, r_HDI, r_HAQI)) %>% ggpairs(lower = list(continuous = wrap("points", alpha = 0.3, size=0.4))); 
+dat_est %>% distinct(region, .keep_all = T) %>% dplyr::select(c(r_log_GDP, r_log_GDP_p3, r_log_GDP_pc, r_log_GDP_pc_p3, r_logit_GINI, r_logit_HDI, r_logit_HAQI)) %>% ggpairs(lower = list(continuous = wrap("points", alpha = 0.3, size=0.4)))
+```
+

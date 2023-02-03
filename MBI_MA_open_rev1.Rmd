@@ -1,0 +1,655 @@
+---
+title: "MBI_MA_open"
+author: ""
+date: ""
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, echo = FALSE, dpi = 300, cache.lazy = FALSE, tidy = "styler", out.width = "90%", fig.align = "center", fig.width = 10, fig.asp = 0.618, error = F, warning = F)
+
+options(dplyr.print_min=Inf,
+        tibble.width=Inf, 
+        tibble.print_max=20,
+        max.print = 100000,
+        digits = 8, 
+        scipen=999999)
+
+rm(list=ls())
+library(metafor)
+library(robumeta)
+library(clubSandwich)                      
+library(tidyverse)
+library(weightr)
+library(ggplot2)
+library(reshape2)
+library(cowplot)
+library(janitor)
+library(bda)                               
+library(lavaan)
+library(ggridges)
+library(ggExtra)
+library(GGally)
+library(viridis)
+library(MASS)
+library(ordinal)       
+library(boot)          
+library(dvmisc)        
+library(hrbrthemes)   
+library(patchwork)    
+library(rstatix)
+set.seed(55555)
+
+win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_submission/"
+mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_submission/"
+win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
+mac_desktop <- "~/Desktop/"
+
+my_computer <- 
+  # "win"
+  "mac"
+my_desktop <- get(paste0(my_computer, "_desktop"))
+```
+
+
+```{r data}
+select <- dplyr::select
+
+## main data
+dat <- read_csv(paste0(get(my_computer), "dat2.csv")) 
+
+## publication bias
+dat_aggr_selectMod <- read_csv(paste0(get(my_computer),"dat_aggr_selectedMod2.csv")) 
+
+## propensity score
+df <- read_csv(paste0(get(my_computer), "PSM_data3.csv")) 
+
+## cuing
+merge_ex <- read_csv(paste0(get(my_computer), "merge_ex.csv"))
+merge_die <- read_csv(paste0(get(my_computer), "merge_die.csv"))
+merge_tobb <- read_csv(paste0(get(my_computer), "merge_tobb.csv"))
+merge_sex <- read_csv(paste0(get(my_computer), "merge_sex.csv"))
+merge_au <- read_csv(paste0(get(my_computer), "merge_au.csv"))
+merge_dr <- read_csv(paste0(get(my_computer), "merge_dr.csv"))
+
+## mediators & indirect effect test
+dat_combine <- read_csv(paste0(get(my_computer), "dat_combine2.csv"))
+
+# sensitivity analysis
+data2use <- read_csv(paste0(get(my_computer), "between_group_data2.csv"))
+
+# read in the newly computed data for Reviewer1_8
+data04 <- read_csv(paste0(get(my_computer), "CompleteES_Sep2021_corr04_ddv.csv"))
+data06 <- read_csv(paste0(get(my_computer), "CompleteES_Sep2021_corr06_ddv.csv"))
+rho <- 0.6
+
+names(data04)
+```
+
+
+```{r editor_country_comment}
+dat_master <- read_csv(paste0(get(my_computer), "MBI_master_data.csv")) %>%
+  mutate(countryj = case_when(
+           countryj == "Belgium, Italy, France, Germany, The Netherlands, Poland, Spain, England" ~ "Belgium_Italy_France_Germany_Netherlands_Poland_Spain_United Kingdom",
+           countryj == "bulgaria" ~ "Bulgaria",
+           countryj == "FRANCE" ~ "France",
+           countryj == "Indian" ~ "India",
+           countryj == "Namibia,Kenya,Tanzania" ~ "Namibia_Kenya_Tanzania",
+           countryj == "Per\xfa" ~ "Peru",
+           countryj == "Russia, Bulgaria" ~ "Russia_Bulgaria",
+           countryj == "South africa" ~ "South Africa",
+           countryj == "Sto Domingo" ~ "Dominican Republic",
+           countryj %in% c("china", "Chine") ~ "China",
+           countryj %in% c("Taiwan, China", "Taiwan") ~ "Taiwan, ROC",
+           countryj %in% c("Japan", "japan") ~ "Japan",
+           countryj %in% c("Iran", "IRAN", "Islamic Republic of Iran") ~ "Iran",
+           countryj %in% c("The Nederlands", "The Netherlands", "Netherlands", "Amsterdam Netherlands") ~ "The Netherlands",
+           countryj == "Tajikistan-Russia" ~ "Tajikistan_Russia",
+           countryj %in% c("U.S", "U.S.", "US", "usa", "Usa", "USA", "United States of America", "America", "NY") ~ "United States",
+           countryj == "USAThailand" ~ "United States_Thailand", 
+           countryj %in% c("UK", "England") ~ "United Kingdom",
+           countryj == "zimbabwe" ~ "Zimbabwe",
+           countryj == "Swizerland" ~ "Switzerland",
+           T ~ countryj
+         )) %>%
+  # distinct(authyear, .keep_all = T) %>% tabyl(countryj) %>% write_csv("~/Desktop/country.csv")
+  mutate(western_countries = case_when(
+    countryj %in% c("Australia", "Belgium", "Canada", "Denmark", "Finland", "France", "Germany", "Italy", "New Zealand", "Norway", "Russia", "Spain", "Sweden", "Switzerland", "The Netherlands", "United Kingdom", "United States") ~ 1,
+    T ~ 0
+  )) %>%
+  mutate(
+    rec_cat = case_when(
+      NMainrecom == 0 ~ "0",
+      NMainrecom == 1 ~ "1",
+      NMainrecom == 2 ~ "2",
+      NMainrecom == 3 ~ "3",
+      NMainrecom == 4 ~ "4+"
+    ),
+    designj = case_when(
+      designj > 3 | is.na(designj) ~ 1,
+      T ~ designj
+    ),
+    N_cat = case_when(
+      N < 100 ~ "Small",                              # https://gomy.pakasak.com/when-is-a-sample-size-considered-large
+      T ~ "Large"
+    ),
+    describe = case_when(
+      describe %in% c("v", "Yes") ~ "1",
+      is.na(describe) ~ "0",
+      T ~ describe
+    ),
+    intotreat = case_when(
+      is.na(intotreat) ~ 0,
+      T ~ intotreat
+    ),
+    target = case_when(
+      is.na(target) ~ 0,
+      T ~ target
+    ),
+    TARGETED = case_when(
+      is.na(TARGETED) ~ 0,
+      T ~ TARGETED
+    ),
+    SELFSEL = case_when(
+      is.na(SELFSEL) ~ 0,
+      T ~ SELFSEL
+    ),
+    CULTURE = case_when(
+      is.na(CULTURE) ~ 0,
+      T ~ CULTURE
+    ),
+    dofinter_cat = if_else(dofinter > 90, "long", "short") 
+  )
+
+## add country and western and other needed variables
+dat_country_western <- dat_master %>% 
+  select(rowID, countryj, western_countries, 
+         pubyear,                  # year of pub
+         N,                        # sample size
+         prob_mean,                # outcome in mean diff. or proportion
+         
+         nopostt,                  # posttest #
+         domain,                   # DA HIV LS
+         NAUXrecomend,             # aux. rec. #
+         target,                   # outcome targeted by intervention
+         TARGETED,                 # targeted study sample
+         CULTURE,                  # intervention culturally appropriate
+         countryj,                 # country
+         SELFSEL,                  # self-selected participants
+         
+         # -------- methodology factors -------- 
+         designj,                  # exp vs. quasi-exp vs. crct (deisgn aspect)
+         N_cat,                    # ditchotomize sample size based on the criterion of 100 (conducting aspect)
+         dofinter,                 # duration of intervention
+         dofinter_cat,             # long (high quality research) vs. short (conducting aspect)
+         intotreat,                # intention-to-treat (analysis aspect)
+         describe,                 # describe intervention in detail (report aspect)
+         # clinical,                 # clinical vs. non-clinical outcomes   (the data had it)
+         T1,                       # time between interventio and 1st posttest
+         
+         # scsoc,                    # stage of change (high missing%)
+         scsm,                     # self-monitoring
+         scmi,                     # motivational interviewing
+         # BKGRADT,                  # background program/intervention an addiction treatment (high missing%)
+         
+         rec_cat                   # category of NMainrecom
+         )
+dat <- dat %>%
+  left_join(dat_country_western, by = "rowID") %>%
+  mutate(research_quality = case_when(
+    designj == 1 & N_cat == "Large" & dofinter_cat == "long" & intotreat == 1 ~ "high",
+    # designj == 0 & N_cat == "Small" & dofinter_cat == "short" & intotreat == 0 ~ "poor",    # 0 case
+    T ~ "non-high"
+  ))
+dat_western <- dat %>% filter(western_countries == 1)
+dat_eastern <- dat %>% filter(western_countries == 0)
+
+# sapply(dat_country_western, function(x){sum(is.na(x))/length(x)})
+# dat %>% tabyl(dofinter)
+# dat_country_western %>%
+#   ggplot(aes(x = dofinter)) + 
+#   geom_density() + 
+#   geom_vline(xintercept = 180)
+```
+
+
+```{r Reviewer1_8_data}
+# ## get new d & dv values
+# data04_ddv <- data04 %>%
+#   select(authyear, record, varname, outcomeID, prob_mean, wave_base1, d, dv)
+# data06_ddv <- data06 %>%
+#   select(authyear, record, varname, outcomeID, prob_mean, wave_base1, d, dv)
+# dat_master_rowID <- dat_master %>%
+#   select(authyear, record, varname, outcomeID, prob_mean, wave_base1, rowID)
+# 
+# data04_ready <- dat_master_rowID %>%
+#   left_join(data04_ddv, by = c("authyear", "record", "varname", "outcomeID", "prob_mean", "wave_base1")) %>%
+#   select(d, dv, rowID)
+# data06_ready <- dat_master_rowID %>%
+#   left_join(data06_ddv, by = c("authyear", "record", "varname", "outcomeID", "prob_mean", "wave_base1")) %>%
+#   select(d, dv, rowID)
+# 
+# dat_no_ddv <- dat %>% select(-d, -dv)
+# dat_04 <- dat_no_ddv %>%
+#   left_join(data04_ready, by = "rowID")
+# dat_06 <- dat_no_ddv %>%
+#   left_join(data06_ready, by = "rowID")
+# 
+# ## find missing rows
+# missing_rows <- dat$rowID[which(is.na(dat_04$d) != is.na(dat$d))]
+# missing_ddv <- dat %>%
+#   select(rowID, d2 = d, dv2 = dv) %>%
+#   filter(rowID %in% missing_rows)
+# 
+# ## add missing d & dv values
+# dat_04 <- dat_04 %>%
+#   left_join(missing_ddv, by = "rowID") %>%
+#   mutate(
+#     d = as.numeric(d),
+#     d = case_when(
+#       !is.na(d2) ~ d2,
+#       T ~ d
+#     ),
+#     dv = case_when(
+#       !is.na(dv2) ~ dv2,
+#       T ~ dv
+#     ))
+# dat_06 <- dat_06 %>%
+#   left_join(missing_ddv, by = "rowID") %>%
+#   mutate(
+#     d = as.numeric(d),
+#     d = case_when(
+#       !is.na(d2) ~ d2,
+#       T ~ d
+#     ),
+#     dv = case_when(
+#       !is.na(dv2) ~ dv2,
+#       T ~ dv
+#     ))
+# 
+# ## save update
+# write_csv(dat_04, paste0(my_desktop, "CompleteES_Sep2021_corr04_ddv.csv"))
+# write_csv(dat_06, paste0(my_desktop, "CompleteES_Sep2021_corr06_ddv.csv"))
+```
+
+
+```{r Table4_related_comments}
+# dat_complete <- dat %>%
+#   select(-c(ps_scalar, dofinter)) %>%   ###### I need to use the same data in comparing the explained heterogeneity ######
+#   drop_na()
+
+### <Table 4>
+V_mat <- impute_covariance_matrix(vi = dat$dv,
+                                  cluster = dat$ID,
+                                  r = rho,
+                                  smooth_vi = TRUE)
+main_numre_CHE <- rma.mv(d ~ W + NMainrecom + motivation + expertsource + clinical + ps_scalar,
+                         V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+test_main_numre_CHE <- coef_test(main_numre_CHE, vcov = "CR2")
+
+
+### Editor2 & Reviewer1_4: base model -----------
+dat2 <- dat[! (is.na(dat$W) | is.na(dat$NMainrecom) | is.na(dat$motivation) | is.na(dat$expertsource) | is.na(dat$clinical) | 
+                is.na(dat$ps_scalar)),]
+V_mat2 <- impute_covariance_matrix(vi = dat$dv, 
+                                  cluster = dat$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+base_CHE <- rma.mv(d ~ 1, V = V_mat2, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)      # base model
+test_base_CHE <- coef_test(base_CHE, vcov = "CR2")
+
+outcome_linear <- rbind(print(test_main_numre_CHE), c("sigma2", main_numre_CHE$sigma2), c("levels", main_numre_CHE$s.nlevels))
+outcome_linear_base <- rbind(print(test_base_CHE), c("sigma2", base_CHE$sigma2), c("levels", base_CHE$s.nlevels))
+Table4_compare <- rbind(outcome_linear, outcome_linear_base)
+# write_csv(Table4_compare, paste0(my_desktop, "Table4_model.csv"))
+
+
+### Editor2 & Reviewer1_4: big model -----------
+V_big <- impute_covariance_matrix(vi = dat$dv, 
+                                  cluster = dat$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+big_CHE <- rma.mv(d ~ W + NMainrecom + motivation + expertsource + clinical + # ps_scalar + 
+                    pubyear + N + prob_mean + 
+                    nopostt + domain + NAUXrecomend + target + TARGETED + CULTURE + designj + countryj + SELFSEL + 
+                    intotreat + describe + dofinter + 
+                    scsm + scmi, 
+                   V = V_big, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)               # big model
+test_big_CHE <- coef_test(big_CHE, vcov = "CR2")
+
+outcome_linear_big <- rbind(print(test_big_CHE), c("sigma2", big_CHE$sigma2), c("levels", big_CHE$s.nlevels))
+outcome_linear_base <- rbind(print(test_base_CHE), c("sigma2", base_CHE$sigma2), c("levels", base_CHE$s.nlevels))
+Table4_compare_big <- rbind(outcome_linear_big, outcome_linear_base)
+# write_csv(Table4_compare_big, paste0(my_desktop, "Table4_big_model.csv"))
+
+
+
+### Editor4: <Table4> Western/Eastern -----------
+west <- rma.mv(d ~ W + NMainrecom + motivation + expertsource + clinical + ps_scalar + western_countries,             
+                         V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+
+test_west <- coef_test(west, vcov = "CR2")
+
+outcome_west <- rbind(print(test_west), c("sigma2", west$sigma2), c("levels", west$s.nlevels))
+write_csv(outcome_west, paste0(my_desktop, "Editor4_western_countries.csv"))
+
+
+### Editor5: <Table4> research quality -----------
+quality <- rma.mv(d ~ W + NMainrecom + motivation + expertsource + clinical + ps_scalar + research_quality,             
+                         V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+
+test_quality <- coef_test(quality, vcov = "CR2")
+
+outcome_quality <- rbind(print(test_quality), c("sigma2", quality$sigma2), c("levels", quality$s.nlevels))
+# write_csv(outcome_quality, paste0(my_desktop, "Editor5_research_quality.csv"))
+
+
+### Rev1_3: Wald test for comparing NMainrecom [0, 4] -------------- no sig. results
+# V_rec <- impute_covariance_matrix(vi = dat2$dv, 
+#                                   cluster = dat2$ID, 
+#                                   r = rho, 
+#                                   smooth_vi = TRUE)
+# rec_CHE <- rma.mv(d ~ W + rec_cat + motivation + expertsource + clinical + ps_scalar + western_countries, 
+#                   V = V_rec, random = ~ 1 | authyear / ID / rowID, data = dat2, sparse = TRUE)     
+# test_rec_CHE <- coef_test(rec_CHE, vcov = "CR2")
+
+# Wald_test(rec_CHE, constraints = constrain_pairwise(3:6), vcov = "CR2")  # none of the pairwise comparison is sig.
+
+
+### <Table 4> - Reviewer1_6
+main_numre_CHE <- rma.mv(
+  d ~ W + NMainrecom + motivation + expertsource + clinical + ps_scalar + dofinter,
+                         V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = T)                          # Reviewer1_6_1
+# main_numre_CHE <- rma.mv(
+#   d ~ W + NMainrecom + motivation + expertsource + clinical + ps_scalar + T1,
+#                          V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = T)                         # Reviewer1_6_2
+test_main_numre_CHE <- coef_test(main_numre_CHE, vcov = "CR2")
+Reviewer1_6 <- rbind(print(test_main_numre_CHE), c("sigma2", main_numre_CHE$sigma2), c("levels", main_numre_CHE$s.nlevels))
+write_csv(Reviewer1_6, paste0(my_desktop, "Reviewer1_6_1.csv"))
+
+
+### <Table 4> - Reviewer1_7
+main_numre_CHE <- rma.mv(
+  d ~ W + NMainrecom + motivation + expertsource + clinical + ps_scalar + prob_mean,
+                         V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = T)                          # Reviewer1_7
+test_main_numre_CHE <- coef_test(main_numre_CHE, vcov = "CR2")
+Reviewer1_7 <- rbind(print(test_main_numre_CHE), c("sigma2", main_numre_CHE$sigma2), c("levels", main_numre_CHE$s.nlevels))
+write_csv(Reviewer1_7, paste0(my_desktop, "Reviewer1_7.csv"))
+
+
+### <Table 4> - Reviwer1_8
+data_version <-      # 0.4 and 0.6 correlation data
+  # "dat_04"
+  "dat_06"
+V_mat <- impute_covariance_matrix(vi = get(data_version)$dv,
+                                  cluster = get(data_version)$ID,
+                                  r = 0.6,
+                                  smooth_vi = TRUE)
+main_numre_CHE <- rma.mv(d ~ W + NMainrecom + motivation + expertsource + clinical + ps_scalar,
+                         V = V_mat, random = ~ 1 | authyear / ID / rowID, data = get(data_version), sparse = T)
+test_main_numre_CHE <- coef_test(main_numre_CHE, vcov = "CR2")
+Reviewer1_8 <- rbind(print(test_main_numre_CHE), c("sigma2", main_numre_CHE$sigma2), c("levels", main_numre_CHE$s.nlevels))
+# write_csv(Reviewer1_8, paste0(my_desktop, "Reviewer1_8_", data_version, ".csv"))
+```
+
+
+```{r Reviewer3}
+## Reviewer3_3 about English language issue - only 1 Italian paper
+study_master <- dat_master %>% distinct(authyear, .keep_all = T) 
+study_master %>% tabyl(langj) %>% adorn_totals()
+study_master$authyear[which(is.na(study_master$langj))]  # [1] "Maddison et al., 2014 (new) ENGLISH" "Yonkers et al. 2012" ENGLISH   
+study_master$authyear[which(study_master$langj == "English, Italian")]  # Italian
+
+
+
+```
+
+
+```{r Reviewer4}
+## Minor_Point2
+glimpse(dat_master[1:50])
+
+dat_master %>% filter(domain == "LS") %>% tabyl(varname) %>% adorn_totals() %>% arrange(desc(n))
+dat_master %>% filter(domain == "HIV") %>% tabyl(varname) %>% adorn_totals() %>% arrange(desc(n))
+dat_master %>% filter(domain == "DA") %>% tabyl(varname) %>% adorn_totals() %>% arrange(desc(n))
+```
+
+
+```{r revFigure_NMainrecom}
+### Editor6 -------------------------------------------------------------------
+## find data and steps
+dat2 <- dat[! (is.na(dat$W) | is.na(dat$NMainrecom) | is.na(dat$motivation) | is.na(dat$expertsource) | is.na(dat$clinical) | 
+                is.na(dat$ps_scalar)),]
+dat2 %>% 
+  mutate(clinical = case_when(
+    clinical == "Behavioral" ~ 0,
+    T ~ 1
+  )) %>% 
+  get_summary_stats(c(W, motivation, expertsource, clinical, ps_scalar))
+min_value <- min(dat2$NMainrecom)
+max_value <- max(dat2$NMainrecom)
+steps <- seq(min_value, max_value, (max_value - min_value)/(100-1))
+  
+## prediction: intercept, W, NMainrecom, motivation, expertsource, clinical, ps_scalar, 
+predict_main <- as.tibble(metafor::predict.rma(main_numre_CHE, newmods = cbind(0.280, steps, 0.150, 0.314, 0.428, -3.622), addx = T, level = 0.95))
+
+
+## plot
+ggplot() +         
+  geom_jitter(aes(x = NMainrecom, y = d, size = 1/dv, color = NMainrecom), alpha=0.4, data = dat2) + 
+  geom_line(aes(y = pred, x = X.NMainrecom), color = "red", size = 1, data = predict_main) +
+  geom_ribbon(aes(y = pred, x = X.NMainrecom, ymin=ci.lb, ymax=ci.ub), alpha=0.3, fill = "red", color = "red", linetype = 0, data = predict_main) +
+  labs(
+     x = "Number of Recommendation",
+     y = "Effect Size (d)",
+     color = "Number of Recommendation",
+     size = "Weight (Inverse Variance)"
+     ) +
+  theme_minimal()
+# ggsave(paste0(my_desktop, "Table4_model_figure.jpeg"), height = 5, width = 1.618*5)
+  
+### Reviewer1_3: linear relationship ------------------------------------------
+dat2 %>% 
+    group_by(ID) %>%
+    summarise(avg_d = mean(d, rm.na = T),
+              NMainrecom = as.factor(NMainrecom[1])) %>%
+    mutate(fct_NMainrecom = factor(case_when(
+      NMainrecom == 0 ~ "0",
+      NMainrecom == 1 ~ "1",
+      NMainrecom == 2 ~ "2",
+      NMainrecom == 3 ~ "3",
+      T ~ "4+",
+    ))) %>%
+    ungroup() %>% 
+    ggplot(aes(x = avg_d, y = fct_NMainrecom, fill = fct_NMainrecom)) + 
+      geom_density_ridges(alpha = 0.5) +     # bandwidth = 0.1  smoothing; rel_min_height = 0.01 cut low tails
+      # geom_abline(intercept = 2, slope = 15, lty = "dashed", size = 2, color = "red") +
+      coord_flip() +
+      
+      scale_fill_viridis_d() + 
+      labs(
+         y = "Number of Recommendations",
+         x = "Sample-Level Effect Size (d)",
+         fill = "Number of Recommendations"
+         ) +
+      theme_minimal()
+# ggsave(paste0(my_desktop, "sample_level_ES_dist.jpeg"), height = 5, width = 1.618*5)
+```
+
+
+### Table 5
+```{r Table 5}
+# CHE approach <start> ---------------------------------------------------------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+V_mat_ex <- impute_covariance_matrix(merge_ex$dv_avg, cluster = merge_ex$ID, r = rho, smooth_vi = TRUE)                # exercise
+V_mat_die <- impute_covariance_matrix(merge_die$dv_avg, cluster = merge_die$ID, r = rho, smooth_vi = TRUE)             # diet
+V_mat_tobb <- impute_covariance_matrix(merge_tobb$dv_avg, cluster = merge_tobb$ID, r = rho, smooth_vi = TRUE)          # smoking
+V_mat_sex <- impute_covariance_matrix(merge_sex$dv_avg, cluster = merge_sex$ID, r = rho, smooth_vi = TRUE)             # HIV
+V_mat_au <- impute_covariance_matrix(merge_au$dv_avg, cluster = merge_au$ID, r = rho, smooth_vi = TRUE)                # alcohol use
+V_mat_dr <- impute_covariance_matrix(merge_dr$dv_avg, cluster = merge_dr$ID, r = rho, smooth_vi = TRUE)                # drug use
+
+
+# no fptime
+merge_ex_CHE <- rma.mv(d_avg ~ W_avg + exd,
+                        V = V_mat_ex, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_ex, 
+                        sparse = TRUE)
+merge_die_CHE <- rma.mv(d_avg ~ W_avg + dietd,
+                        V = V_mat_die, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_die, 
+                        sparse = TRUE)
+merge_tobb_CHE <- rma.mv(d_avg ~ W_avg + tobbd,
+                        V = V_mat_tobb, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_tobb, 
+                        sparse = TRUE)
+merge_sex_CHE <- rma.mv(d_avg ~ W_avg + sexd,
+                        V = V_mat_sex, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_sex, 
+                        sparse = TRUE)
+merge_au_CHE <- rma.mv(d_avg ~ W_avg + aud,
+                        V = V_mat_au, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_au, 
+                        sparse = TRUE)
+merge_dr_CHE <- rma.mv(d_avg ~ W_avg + subd,
+                        V = V_mat_dr, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_dr, 
+                        sparse = TRUE)
+
+# RVE standard errors
+CI_merge_ex_CHE <- conf_int(merge_ex_CHE, vcov = "CR2")
+CI_merge_die_CHE <- conf_int(merge_die_CHE, vcov = "CR2")
+CI_merge_tobb_CHE <- conf_int(merge_tobb_CHE, vcov = "CR2")
+CI_merge_sex_CHE <- conf_int(merge_sex_CHE, vcov = "CR2")
+CI_merge_au_CHE <- conf_int(merge_au_CHE, vcov = "CR2")
+CI_merge_dr_CHE <- conf_int(merge_dr_CHE, vcov = "CR2")
+
+test_merge_ex_CHE <- coef_test(merge_ex_CHE, vcov = "CR2")
+test_merge_die_CHE <- coef_test(merge_die_CHE, vcov = "CR2")
+test_merge_tobb_CHE <- coef_test(merge_tobb_CHE, vcov = "CR2")
+test_merge_sex_CHE <- coef_test(merge_sex_CHE, vcov = "CR2")
+test_merge_au_CHE <- coef_test(merge_au_CHE, vcov = "CR2")
+test_merge_dr_CHE <- coef_test(merge_dr_CHE, vcov = "CR2")
+
+# CHE approach <end> ---------------------------------------------------------------------------------------
+# CI_merge_ex_CHE; CI_merge_die_CHE; CI_merge_tobb_CHE; CI_merge_sex_CHE; CI_merge_au_CHE; CI_merge_dr_CHE
+merge_ex_CHE; merge_die_CHE; merge_tobb_CHE; merge_sex_CHE; merge_au_CHE; merge_dr_CHE
+test_merge_ex_CHE; test_merge_die_CHE; test_merge_tobb_CHE; test_merge_sex_CHE; test_merge_au_CHE; test_merge_dr_CHE
+```
+
+### Table 6
+```{r Table 6}
+# CHE models -------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+wb_data <- dat_combine %>% filter(!is.na(d_distress))
+V_mat_wb <- impute_covariance_matrix(wb_data$dv_avg, cluster = wb_data$ID, r = rho, smooth_vi = TRUE)
+
+# choose which time form to use 
+time_form <- "Z_fptime"
+
+# psyc well-being
+merge_wb_CHE1 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg,
+                        V = V_mat_wb,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = wb_data,
+                        sparse = TRUE)
+merge_wb_CHE2 <- rma.mv(d_distress ~ W_avg + get(time_form) + NMainrecom_avg,              
+                        V = V_mat_wb,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = wb_data,
+                        sparse = TRUE)
+merge_wb_CHE3 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg + d_distress,
+                        V = V_mat_wb,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = wb_data,
+                        sparse = TRUE)
+
+CI_merge_wb_CHE1 <- conf_int(merge_wb_CHE1, vcov = "CR2")
+CI_merge_wb_CHE2 <- conf_int(merge_wb_CHE2, vcov = "CR2")
+CI_merge_wb_CHE3 <- conf_int(merge_wb_CHE3, vcov = "CR2")
+test_merge_wb_CHE1 <- coef_test(merge_wb_CHE1, vcov = "CR2")
+test_merge_wb_CHE2 <- coef_test(merge_wb_CHE2, vcov = "CR2")
+test_merge_wb_CHE3 <- coef_test(merge_wb_CHE3, vcov = "CR2")
+
+### Results -----------------------------------------------------------------
+merge_wb_CHE1; merge_wb_CHE2; merge_wb_CHE3
+test_merge_wb_CHE1; test_merge_wb_CHE2; test_merge_wb_CHE3
+
+wb_data$Z_fptime
+```
+
+### Table 7
+```{r Table 7}
+## Sobel test ----------------
+bda::mediation.test(wb_data$d_distress, wb_data$NMainrecom_avg, wb_data$d_avg)
+
+## path models -----------------
+# psych. well-being
+wb_path <- '
+d_distress ~ a*NMainrecom_avg
+d_avg ~ c*NMainrecom_avg + b*d_distress
+
+indirect := a*b    
+direct := c
+total := c + a*b
+'
+
+wb_results <- sem(wb_path, wb_data, se = "bootstrap", bootstrap = 5000)  # bootstrapping SE
+wb_results2 <- sem(wb_path, wb_data, se = "robust.huber.white")          # MLR estimator: ML in combination with Huber-White robust standard errors and a robust test statistic
+
+## results
+summary(wb_results, fit.measures = T, rsquare = T, standardized = T); summary(wb_results2, fit.measures = T, rsquare = T, standardized = T)   
+```
+
+
+### Table S3 in Appendices
+```{r sensitivity_analysis_Appendix_F_TableS3}
+## generate quadratic term
+data2use <- data2use %>%
+  mutate(scale_nm_ref = as.vector(scale(NMainrecom_ref, scale=FALSE, center=TRUE)),
+         sqrrec_ref = scale_nm_ref^2) 
+
+
+## getting descriptions of baseline equivalence
+cat("Mean of standardized baseline group difference = "); cat(mean(data2use$baseline_diff, na.rm = T)); 
+cat("\nSD of standardized baseline group difference = "); cat(sd(data2use$baseline_diff, na.rm = T))
+
+
+## <Table S3>
+# CHE approach <start> ---------------------------------------------------------------------------------------
+rho <- 0.6
+
+V_mat <- impute_covariance_matrix(vi = data2use$dv_diff, 
+                                  cluster = data2use$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+
+main_numre_CHE <- rma.mv(d_diff ~ W + NMainrecom_diff + scai + motivation + scas + expertsource + clinical + clinic,
+                         V = V_mat, random = ~ 1 | authyear / rowID, data = data2use, sparse = TRUE)
+main_numsqrrec_CHE <- rma.mv(d_diff ~ W + scale_nm_diff + sqrrec_diff + scai + motivation + scas + expertsource + clinical + clinic, 
+                             V = V_mat, random = ~ 1 | authyear / rowID, data = data2use, sparse = TRUE)
+
+CI_main_numre_CHE <- conf_int(main_numre_CHE, vcov = "CR2")
+CI_main_numsqrrec_CHE <- conf_int(main_numsqrrec_CHE, vcov = "CR2")
+
+test_main_numre_CHE <- coef_test(main_numre_CHE, vcov = "CR2")
+test_main_numsqrrec_CHE <- coef_test(main_numsqrrec_CHE, vcov = "CR2")
+# -----------------------------------------------------------------------------------------------------------
+
+
+# results ---------------------
+main_numre_CHE; main_numsqrrec_CHE;                             # Table S3: uncorrected SE 
+test_main_numre_CHE; test_main_numsqrrec_CHE                    # Table S3
+```
+

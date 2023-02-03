@@ -1,0 +1,1502 @@
+---
+title: "MBI_MA_SL"
+author: "Sicong Liu"
+date: "2/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, echo = FALSE, dpi = 300, cache.lazy = FALSE, tidy = "styler", out.width = "90%", fig.align = "center", fig.width = 10, fig.asp = 0.618, error = F, warning = F)
+options(dplyr.print_min=Inf,
+        tibble.width=Inf, 
+        tibble.print_max=20,
+        max.print = 100000,
+        digits = 5, 
+        scipen=999999)
+```
+
+### About v5
+This version corresponds to v4 MBI MA manuscript.
+
+* Further info about variable 'T1' from Marta: Not all the reports give us such info, but we try to obtain it. You should count from the day of the intervention, or from the last day of the intervention, through the day of the next measurement (maybe 3 months, then 90 days). We did not use to count from the baseline day because not all the participants completed the intervention.   
+
+### Data pre-proc  - UPDATED
+```{r preproc, echo=F}
+rm(list=ls())
+library(metafor)
+library(robumeta)
+library(clubSandwich)                       # for RVE with metafor; requires version 0.5.1 or higher
+library(tidyverse)
+library(weightr)
+library(ggplot2)
+library(ggridges)
+library(grid)
+library(gridExtra)
+library(reshape2)
+library(cowplot)
+library(dplyr)
+library(janitor)
+library(bda)                               # mediation.test(), Sobel test
+library(lavaan)
+
+win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_master/"                             # 1st submission path
+mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_master/"
+
+# win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"                   # 1st revision path
+# mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"
+# mac2 <- "~/Box Sync/Zone/7_MBI_Database/PS_Model/"
+
+win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
+mac_desktop <- "~/Desktop/"
+
+my_computer <- 
+  "win"
+  # "mac"
+my_desktop <- paste0(my_computer, "_desktop")
+
+select <- dplyr::select
+```
+
+
+```{r read_data}
+### old data --------------------------------------------------
+# Run lines 22 through 234 to get cleaned datasets
+dat <- read_csv(paste0(get(my_computer), "CompleteES_May2021.csv"))
+target <- read_csv(paste0(get(my_computer), "TARGETED.csv"))
+ps_scalar <- read_csv(paste0(get(my_computer), "PS_scalar.csv"))                                      # propensity score
+dat <- dat %>%
+        left_join(target,by=c("authyear","record","varname","outcomeID","wave_base1"))        # add 'target'
+# write_csv(dat, "~/Desktop/CompleteES_May2021_target.csv")              # to merge w/ new data in MBI_MA_data_rev1.Rmd
+# ### new data --------------------------------------------------
+# dat0 <- read_csv(paste0(get(my_computer), "MBI_master_data.csv"))
+# studies0 <- dat0 %>% distinct(authyear) %>% flatten_chr()
+# dat <- read_csv(paste0(get(my_computer), "new_ES.csv")) %>%
+#   mutate(d = as.numeric(d),
+#          old_ES = if_else(authyear %in% studies0, 1, 0),                                          # add old ES indicators
+#          RCPTHsi = if_else(RCPTHsi < 0, NA_real_, RCPTHsi),
+#          HIAGRtot = if_else(HIAGRtot < 0, NA_real_, HIAGRtot)) %>%
+#   naniar::replace_with_na_all(condition = ~.x %in% c(-999,-9999,-99999,"-999", "-9999"))
+# ps_scalar <- read_csv(paste0(mac2, "PS_scalar_new.csv"))
+# # -------------------------------------------------------------
+
+# exclude extreme values
+dat <- dat[which(dat$dv >0),]
+dat <- dat[which(abs(dat$d) < 3.3),]
+dat <- dat[which(dat$wt < 10000),]
+
+# ## Zone: investigate excluded d values
+# dat$d[!(dat$dv >0)]                 # 91 NAs
+# dat$d[(abs(dat$d) >= 3.3)]
+# dat$d[(dat$wt >= 10000)]
+
+# create unique 'ID' for <authyear, record> and for <authyear>  
+dat$ID <-cumsum(!duplicated(dat[1:2]))   
+dat <- dat %>%
+        left_join(ps_scalar, by = "ID")                                                       # add new propensity score to the data
+dat <- dat[which(dat$dv < 2),]
+dat$studyid <-cumsum(!duplicated(dat[1]))                                                                        
+
+# create number of domains covered in intervention & domain factor (i.e.,"LS","HIV","DA")
+dat$GR1[is.na(dat$GR1)] <- 0                                                                                     
+dat$GR2[is.na(dat$GR2)] <- 0 
+dat$GR3[is.na(dat$GR3)] <- 0 
+dat$domaincount <- dat$GR1+dat$GR2+dat$GR3 
+dat$domain <- NA                                                                                                
+dat$domain[dat$GR1==1] <- 1
+dat$domain[dat$GR2==1] <- 2
+dat$domain[dat$GR3==1] <- 3
+dat$domain <- factor(dat$domain,levels=c(1,2,3),labels =c("LS","HIV","DA"))                                      # e.g.: dat[1:60,c('Ndomains','GR1','GR2','GR3','domains','domaincount','NMainrecom', 'recommend')]
+
+# create the group factor (i.e., "WLC","AC","MBI")
+dat$NAUXrecomend[is.na(dat$NAUXrecomend)] <- 0
+dat$NMainrecom[is.na(dat$NMainrecom)] <- 0
+dat$group <- 0
+dat$group[dat$NMainrecom == 1] <- 1
+dat$group[dat$NMainrecom > 1] <- 2
+dat$group <- factor(dat$group,levels=c(0,1,2),labels=c("WLC","AC","MBI"))                                        # create 'group': WLC, waiting list control; AC, active control; MBI, multi-behavioral intervention 
+
+# create whether the info source is a peer
+# <csrpeer>: Is the communication source a peer? NI=-9999; NA=-999
+dat$csrpeer[is.na(dat$csrpeer)] <- 0
+dat$csrpeer[dat$csrpeer == 2] <- 1
+dat$csrpeer <- factor(dat$csrpeer, levels=c(0,1),labels=c("N","Y"))
+
+# create expert source of info
+# <scsi>: What is the source identity in the intervention? 1. family member 2. community leader 3. public health educator 4. attorney 5. gay leader 6. doctor/nurse 
+# 7. religious leader 11. multiple. Specify (scsimul) 12. college/graduate students, 13. medical students, 14. clinicalpsycholog ist 15. Other. Specify. NI=-9999; NA=-999.
+dat$expertsource <- 0
+dat$expertsource[dat$scsi == 3] <- 1
+dat$expertsource[dat$scsi == 6] <- 1
+dat$expertsource[dat$scsi == 13] <- 1
+dat$expertsource[dat$scsi == 14] <- 1
+dat$expertsource[is.na(dat$expertsource)] <- 0
+
+# create factor of clinic delivery 
+dat$clinic <- 0
+dat$clinic[dat$DELVR == 2] <-1                                                                     # <DELVR>: What was the delivery context of the intervention? 1. mass media 2. health clinic 3. community 4. schools 5. street 6. other (delvroth) 7. multiple context 9. N/A 10. business workshops 11. bars
+
+# create factor of communication form
+dat$GRPINDJ3T <- factor(dat$GRPINDJ3T, levels = c(0,1,2),labels =c("Group","Individual","Both"))   # Was exposure to the COMMUNICATION in A GROUP OR INDIVIDUAL? 0. group 1. individual 2. both. Not indicated: -9999; not applicable: -999
+dat$individual <- 0
+dat$individual[dat$GRPINDJ3T == "Individual"] <- 1
+
+# re-express scales/format of behavior number
+dat$scale_nm <- scale(dat$NMainrecom, scale=FALSE, center=TRUE)                                    # center 'NMainrecom'
+dat$sqrrec <- (dat$scale_nm)^2                                                                     # create the quadratic term of centered 'NMainrecom'
+# dat$sqrtotrec <- (dat$totalrec)^2                                                                  # create the quadratic term of 'totalrec' (total recom.)    Zone: commented out because no 'totalrec' exists                  
+dat$logrec <- log(1+dat$NMainrecom)                                                                # create the log of ('NMainrecom' + 1)
+dat$logsqrrec <- (dat$logrec)^2                                                                    # create the quadratic term of logrec (see above line)    Zone: so also test on the log scale
+dat$se <- sqrt(dat$dv)
+dat$rec_cat <- dat$NMainrecom
+dat$rec_cat[dat$NMainrecom > 7] <- 7
+dat$rec_cat <- factor(dat$rec_cat,levels=c(0,1,2,3,4,5,6,7),labels = c("Zero","One","Two","Three","Four","Five","Six","Seven+"))
+dat$rec_wilson <- dat$NMainrecom
+dat$rec_wilson[dat$NMainrecom > 7] <- 7
+
+# create factor of whether the measure is behavioral or clinical
+dat$behcli <- factor(dat$behcli,levels=c(1,2,3),labels=c("Behavioral","Clinical","Both"))
+dat$clinical <- 0
+dat$clinical[dat$behcli == "Clinical"] <- 1
+dat$clinical <- factor(dat$clinical,levels=c(0,1),labels=c("Behavioral","Clinical"))
+
+# exclude non-qualified studies
+dat$exclude <- 0
+# dat$exclude[dat$studyid  == 127] <- 1 #not actually MBX
+dat$exclude[dat$authyear  == "Jemmott, Jemmott, Fong & Morales, 2010 (updated)"] <- 1  #not actually MBX
+# dat$exclude[dat$studyid  == 176] <- 1 #not actually mbx
+dat$exclude[dat$authyear  == "Mai 2018 (Completed)"] <- 1  #not actually mbx
+# dat$exclude[dat$studyid  == 204] <- 1 #no rec
+dat$exclude[dat$authyear  == "Niiranen, 2014"] <- 1  #no rec
+# dat$exclude[dat$studyid  == 315] <- 1
+dat$exclude[dat$authyear  == "Writing group of the PREMIER collaborative research group, 2003 & Lin et al. 2007 COMPLETED"] <- 1
+dat <- dat[which(dat$exclude == 0),]
+
+# create factor of the nature of intervention communication
+dat$motivation <- 0
+dat$scaa[is.na(dat$scaa)] <- 0                                                                   # Does the intervention communication use attitudinal arguments? (outcome expectancies, pro/cons, benefits, etc; e.g. using condoms as being good for an outcome behavior) (1=yes,0=No, -9999=NI; -999=NA)
+dat$scai[is.na(dat$scai)] <- 0                                                                   # ... use information arguments? (i.e., educational statements about the mechanisms of related outcomes) (1=yes,0=No, -9999=NI; -999=NA)
+dat$scna[is.na(dat$scna)] <- 0                                                                   # ... use normative arguments? [e.g., opinion and behavior of one's social group (family members, friends, partner, doctors, religious leaders) about condom use] (1=yes,0=No, -9999=NI; -999=NA)
+dat$scta[is.na(dat$scta)] <- 0                                                                   # ... use threat arguments? (e.g. perceptions that there is real risk or threat) (1=yes,0=No, -9999=NI; -999=NA)
+dat$scmi[is.na(dat$scmi)] <- 0                                                                   # ... use motivational interviewing? ((e.g., supporting the recipients' autonomy and self-motivation to change their own behavior through questions and dissonance induction) (1=yes,0=No, -9999=NI; -999=NA)
+dat$motivation <- rowMeans(dat[, c("scaa","scna","scta","scmi")],na.rm=TRUE)                     # SO BEN GOT AN AVERAGE OF MOTIVATION ASPECTS
+dat$scas[is.na(dat$scas)] <- 0                                                                   # Does the intervention teach skills? (1=yes,0=No, -9999=NI; -999=NA)
+
+# Zone: the following variables do not seem to be used 
+dat$scbar[is.na(dat$scbar)] <- 0
+dat$sctime[is.na(dat$sctime)] <- 0
+dat$scsm[is.na(dat$scsm)] <- 0
+dat$scmss[is.na(dat$scmss)] <- 0
+dat$scmss[is.na(dat$scmss == ".")] <- NA
+
+# create 'numberofrows': observation # in each group sample
+g <- tally(group_by(dat,ID))                                                                    
+g <- g %>% rename(numberofrows = n)
+dat <-left_join(dat, g, by = "ID")
+rm(g)
+
+dat <- dat[which(!is.na(dat$wave_base1)), ]                                                      # remove observations without baseline 
+
+# select only studies with 2+ arms
+one_arm <- dat %>%
+        distinct(authyear, ID) %>%
+        tabyl(authyear) %>% 
+        filter(n == 1) %>%
+        dplyr::select(authyear) %>%
+        flatten_chr()
+'%!in%' <- Negate('%in%')
+dat <- dat %>%
+        filter(authyear %!in% one_arm)                                                          # ES 3253 -> 3231 (22)
+
+### preproc data for mediation analysis <Table 6: Mediation Analysis, Linear Effects>
+## Get Aux Outcomes, remove extreme values              
+
+### --- ES + AUX data --- 
+aux <- read.csv(paste0(get(my_computer), "CompleteES+Aux_May2021.csv"))                       # data of 1st submission
+# aux <- read.csv(paste0(get(my_computer), "new_ES+Aux.csv"))                                    # data of 1st revision
+### ---
+
+aux <- aux[which(aux$dv >0),]
+aux <- aux[which(aux$dv <.8),]
+aux <- aux[which(abs(aux$d) < 3.3),]
+
+# preproc parallel to dat: NMainrecom, ID
+aux$NMainrecom[is.na(aux$NMainrecom)] <- 0                                                       # treat missing as 0 in NMainrecom
+aux$ID <-cumsum(!duplicated(aux[1:2]))                                                           # ID: <authyear, record> - sample
+aux <- aux[which(!is.na(aux$wave_base1)),]                                                       # remove observations without baseline
+
+# preproc parallel to dat: info delivery, motivation
+aux$motivation <- 0
+aux$scaa[is.na(aux$scaa)] <- 0
+aux$scna[is.na(aux$scna)] <- 0
+aux$scta[is.na(aux$scta)] <- 0
+aux$scmi[is.na(aux$scmi)] <- 0
+aux$motivation <- rowMeans(aux[, c("scaa","scna","scta","scmi")],na.rm=TRUE)                     # matching dat 
+aux$scai[is.na(aux$scai)] <- 0
+aux$scas[is.na(aux$scas)] <- 0
+
+# the following variables do not seem to be used 
+# aux$scbar[is.na(aux$scbar)] <- 0
+aux$sctime[is.na(aux$sctime)] <- 0
+aux$scsm[is.na(aux$scsm)] <- 0
+aux$scmss[is.na(aux$scmss)] <- 0
+aux$scmss[is.na(aux$scmss == ".")] <- NA
+
+# select only immediate post-test! 
+aux <- aux[which(aux$wave_base1=="w2"), ] 
+
+## use aux to generate datasets for testing behavioral cuing and mediation --------------------------------------------------------------
+## measure specific d's ---- (avg. across varname & outcomeID) ----> sample-specific d's
+# psych well-being - coping, trauma, depression, qua-psy, qua-soc, mood, victim, MH (mental health?)
+distress <- aux[which(aux$varname == "COPING" | aux$varname == "trauma" | aux$varname == "DEP"| aux$varname == "QUAPSY" |aux$varname=="QUASOC"|aux$varname == "MOOD"|aux$varname=="victim" |aux$varname == "MH"),]      # subset data
+
+# I think the data above is used for behavioral cuing with the processing below for mediation - awaiting Ben's confirmation
+distress<-distress[which(distress$NMainrecom <6), ]                                             # select NMainrecom < 6 observations
+# distress <-distress[-c(5:26,28:270)]                                                            # keep only index variables and d's
+distress <-distress[c("authyear", "record", "varname", "outcomeID", "d")]                         # keep only index variables and d's
+distress <- distress %>% rename(d_distress = d, varname_distress = varname)                     # create new d and varname labels
+# avg. across d's from coping, trauma, depression, qua-psy, qua-soc, mood, victim, MH
+distress_wide <- reshape(distress, timevar = "varname_distress", idvar = c("authyear","record","outcomeID"), direction = "wide")
+# distress_wide$d_distress <- rowMeans(distress_wide[,4:9], na.rm=TRUE)                            
+# distress_wide <- distress_wide[-c(4:9)]                                                         # remove distress variables (old static version)
+distress_wide$d_distress <- rowMeans(distress_wide[,grepl("d_distress.", names(distress_wide))], na.rm=TRUE)                            
+distress_wide <- distress_wide[!grepl("d_distress.", names(distress_wide))]                       # remove distress variables (dynamic version)
+distress_wide <- reshape(distress_wide,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+# avg. across d_distress' from n1 to n5
+# distress_wide$d_distress <- rowMeans(distress_wide[, 3:7],na.rm=TRUE)                           
+# distress_wide <- distress_wide[-c(3:7)]
+distress_wide$d_distress <- rowMeans(distress_wide[,grepl("d_distress.", names(distress_wide))], na.rm=TRUE)                            
+distress_wide <- distress_wide[!grepl("d_distress.", names(distress_wide))]
+
+
+# information ~ answer correct % about drug prevention; HIV transmission; importance of preventive behaviors; benefit of abstinence
+info <- aux[which(aux$varname == "KNO" | aux$varname == "SOIMSB" | aux$varname == "SEXK" | aux$varname == "RISBEL" | aux$varname == "OR"),]
+
+# Ben seems to use information argument (scai) to predict 'info' and the positive estimate (.38) supports it
+# infocheck <- robu(formula = d ~ scai, var.eff.size=dv, studynum = ID, modelweights = "CORR", rho = 0.8, small=TRUE, data=info)
+info <-info[c("authyear", "record", "varname", "outcomeID", "d")]
+info <- info %>% rename(d_info = d, varname_info = varname)
+info_wide <- reshape(info,timevar = "varname_info",idvar = c("authyear","record","outcomeID"),direction = "wide")
+# info_wide$d_info <- rowMeans(info_wide[, c("d_info.KNO", "d_info.SOIMSB")],na.rm=TRUE)          # only these 2 col. available
+# info_wide <- info_wide[-c(4,5)]
+info_wide$d_info <- rowMeans(info_wide[, grepl("d_info.", names(info_wide))],na.rm=TRUE)          
+info_wide <- info_wide[!grepl("d_info.", names(info_wide))]
+info_wide <- reshape(info_wide,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide") 
+# info_wide$d_info <- rowMeans(info_wide[, c("d_info.n1", "d_info.n2", "d_info.n3", "d_info.n4")],na.rm=TRUE) # only n1 to n4 available
+# info_wide <- info_wide[-c(3:6)]
+info_wide$d_info <- rowMeans(info_wide[, grepl("d_info.", names(info_wide))],na.rm=TRUE)          
+info_wide <- info_wide[!grepl("d_info.", names(info_wide))]
+
+# motivation ~ attitude, social norms, intentions, perceived risk, perceived susceptibility, perceived effectiveness
+motiv <- aux[which(aux$varname == "PR" | aux$varname == "ATT" | aux$varname == "NORM" | aux$varname ==  "FUTEX"
+                   | aux$varname == "SAFSEX" | aux$varname == "INT" | aux$varname == "PE" | aux$varname == "PS" 
+                   | aux$varname == "CONIPV"),]
+# Ben seems to use 'motivation' to predict 'motiv' but the positive estimate (.15) is not sig. (.29)
+# motivcheck <- robu (formula = d ~ motivation, var.eff.size=dv, studynum = ID, modelweights = "CORR", rho = 0.8, small=TRUE, data=motiv) 
+motiv <-motiv[c("authyear", "record", "varname", "outcomeID", "d")]
+motiv <- motiv %>% rename(d_motiv = d, varname_motiv = varname)
+motiv_wide <- reshape(motiv,timevar = "varname_motiv",idvar = c("authyear","record","outcomeID"),direction = "wide")
+# motiv_wide$d_motiv <- rowMeans(motiv_wide[,4:10],na.rm=TRUE)
+# motiv_wide <- motiv_wide[-c(4:10)]
+motiv_wide$d_motiv <- rowMeans(motiv_wide[,grepl("d_motiv.", names(motiv_wide))],na.rm=TRUE)
+motiv_wide <- motiv_wide[!grepl("d_motiv.", names(motiv_wide))]
+motiv_wide <- reshape(motiv_wide,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+# motiv_wide$d_motiv <- rowMeans(motiv_wide[, c("d_motiv.n1", "d_motiv.n2", "d_motiv.n3", "d_motiv.n4")],na.rm=TRUE) # only n1 to n4 available
+# motiv_wide <- motiv_wide[-c(3:6)]
+motiv_wide$d_motiv <- rowMeans(motiv_wide[,grepl("d_motiv.", names(motiv_wide))],na.rm=TRUE)
+motiv_wide <- motiv_wide[!grepl("d_motiv.", names(motiv_wide))]
+
+
+# behavioral skills ~ skill practice; perceived barriers; self-efficacy
+skill <- aux[which(aux$varname == "SE" | aux$varname == "BAR" | aux$varname == "SK" | aux$varname == "CONDSEF" | aux$varname == "SexComAux"),]
+# Ben seems to use 'scas' (intervention teaches skills) to predict 'skill' but the positive estimate (.12) is not sig. (.28)
+# skillcheck <- robu (formula = d ~ scas, var.eff.size=dv, studynum = ID, modelweights = "CORR", rho = 0.8, small=TRUE, data=skill)
+skill <-skill[c("authyear", "record", "varname", "outcomeID", "d")]
+skill <- skill %>% rename(d_skill = d,varname_skill = varname)
+skill_wide <- reshape(skill,timevar = "varname_skill",idvar = c("authyear","record","outcomeID"),direction = "wide")
+# skill_wide$d_skill <- rowMeans(skill_wide[, 4:7],na.rm=TRUE)
+# skill_wide <- skill_wide[-c(4:7)]
+skill_wide$d_skill <- rowMeans(skill_wide[, grepl("d_skill.", names(skill_wide))],na.rm=TRUE)
+skill_wide <- skill_wide[!grepl("d_skill.", names(skill_wide))]
+skill_wide <- reshape(skill_wide,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+# skill_wide$d_skill <- rowMeans(skill_wide[, c("d_skill.n1", "d_skill.n2", "d_skill.n3", "d_skill.n4")],na.rm=TRUE)  # only n1 to n4 available
+# skill_wide <- skill_wide[-c(3:6)]
+skill_wide$d_skill <- rowMeans(skill_wide[, grepl("d_skill.", names(skill_wide))],na.rm=TRUE)
+skill_wide <- skill_wide[!grepl("d_skill.", names(skill_wide))]
+
+nomainES <- aux[which(aux$varname == "COPING" | aux$varname == "trauma" | aux$varname == "DEP"| aux$varname == "QUAPSY" |aux$varname=="QUASOC"|aux$varname == "MOOD"|aux$varname=="victim" |aux$varname == "MH"|aux$varname == "KNO" | aux$varname == "SOIMSB" | aux$varname == "SEXK" | aux$varname == "RISBEL" | aux$varname == "OR"|aux$varname == "PR" | aux$varname == "ATT" | aux$varname == "NORM" | aux$varname ==  "FUTEX" | aux$varname == "SAFSEX" | aux$varname == "INT" | aux$varname == "PE" | aux$varname == "PS" | aux$varname == "CONIPV"|aux$varname == "SE" | aux$varname == "BAR" | aux$varname == "SK" | aux$varname == "CONDSEF" | aux$varname == "SexComAux"), ]
+
+# Zone comment: Ben aggregated twice (over varname, outcomeID) to operationally get the new mediators. However, the measurement is apparently clustered under a given specific measure of the mediator. Therefore, it may be better to use non-aggregated data as mediators. I need to try.
+
+## combine d's of mediators (from aux data) at immediate posttest with the main data (dat)
+aux_d <- full_join(distress_wide, motiv_wide, by=c("authyear","record"))
+aux_d <- full_join(aux_d,info_wide,by=c("authyear","record"))
+aux_d <- full_join(aux_d,skill_wide,by=c("authyear","record"))
+
+# further combine the mediators - I do no think the new variables were used later (keep them for now)
+aux_d$elaborative_d <- rowMeans(aux_d[,grepl("d_", colnames(aux_d))],na.rm=TRUE)                                 # aggregate distress, motiv, info, skill into 'elaborative'
+aux_d$elaborative_d[is.nan(aux_d$elaborative_d)] <- NA
+aux_d$info_wellbeing <-rowMeans(aux_d[,c("d_distress","d_info")],na.rm=TRUE)
+aux_d$info_wellbeing[is.nan(aux_d$info_wellbeing)] <- NA
+
+# join sample-specific mediators from aux at immediate posttest w/ dat
+dat <- left_join(dat, aux_d, by=c("authyear","record"))     
+
+
+# subset data for testing 'behavior cuing'
+beh <- dat[which(dat$behcli == "Behavioral"),]
+clin <- dat[which(dat$behcli == "Clinical"),]
+# datsummary <- dat %>% distinct(authyear,record, .keep_all = TRUE)
+
+# create immediate posttest (only index and d-related variables) from dat
+dat_merge <- dat[which(dat$wave_base1 == "w2"),]                                                  # extract w2 (i.e., immediate posttest) data
+# dat_merge <- dat_merge[-c(5:27,31:293)]                                                           # remove unrelated variables
+dat_merge <- dat_merge[c("authyear","record","varname","outcomeID","d","dv","wt","info_wellbeing")]
+dat_merge <- dat_merge %>% rename (d_w2 = d, dv_w2 = dv, wt_w2 = wt)   
+      
+
+# create 'dat_fp', delayed posttest ('fp' - far posttest), and create 'fptime' to log time (day) from T variables
+# - Zone: I changed the logging of fptime to be 
+dat_fp <- dat[which(dat$wave_base1 != "w2"),]                                                     
+dat_fp$fptime <- NA                                                                               
+dat_fp$fptime[dat_fp$wave_base1 == "w3"] <- dat_fp$T2[dat_fp$wave_base1 == "w3"]                 
+dat_fp$fptime[dat_fp$wave_base1 == "w4"] <- dat_fp$T3[dat_fp$wave_base1 == "w4"]  
+dat_fp$fptime[dat_fp$wave_base1 == "w5"] <- dat_fp$T4[dat_fp$wave_base1 == "w5"] 
+dat_fp$fptime[dat_fp$wave_base1 == "w6"] <- dat_fp$T5[dat_fp$wave_base1 == "w6"]             # T5 is the highest (no T6 and T7)
+
+
+# merge immediate posttest (dat_merge) and far posttest (dat_fp), so w2 effect sizes are in the same row with w3-6 effect sizes
+dat_fp2 <- left_join(dat_fp, dat_merge, by=c("authyear","record","varname","outcomeID"))   
+
+# change dat to have only immediate posttest 
+dat2 <- dat                                           # Zone: I saved out a complete dataset
+dat <- dat[which(dat$wave_base1 == "w2"), ]
+dat <- dat %>% mutate(rowID = row_number())           # create row ID for CHE approach
+
+# create modified measure of precision for Egger Sandwich test
+dat <- dat %>%
+        mutate(W = 2/sqrt(N), W_sqrt = sqrt(W))          # see Pustejovsky18, p. 59 for the formula 
+dat_fp2 <- dat_fp2 %>%
+        mutate(W = 2/sqrt(N), W_sqrt = sqrt(W))
+
+
+# correct identified errors and save out a copy to avoid repeating this script section for some purposes
+dat2$domain[which(dat2$authyear == "Ingersoll et al., 2013")] <- "DA"      # CORRECTION (database updated)
+dat2$domain[which(dat2$authyear == "Lv, 2013")] <- "LS"
+dat2$domain[which(dat2$authyear == "Savoye et al., 2007 COMPLETED")] <- "LS"
+dat2$domain[which(dat2$authyear == "Wilhelmsen et al., 1986")] <- "LS"
+dat2$domain[which(dat2$authyear == "Wister et al., 2007")] <- "LS"
+
+# publication year Med, M, SD
+dat2$pubyear[which(dat2$pubyear == 201000000000)] <- 2008                  # CORRECTION (database updated)
+dat2$pubyear[which(dat2$pubyear == 20178)] <- 2017
+
+dat2 <- dat2 %>%
+        mutate(scale_nm = as.vector(scale_nm),
+               sqrrec = as.vector(sqrrec))
+# write_csv(dat2, "~/Box Sync/Zone/7_MBI_Database/MBX Stuff to Share/dat2.csv")     # data for propensity-score model in 1st submission
+# write_csv(dat2, "~/Box Sync/Zone/7_MBI_Database/MBX Stuff to Share/dat2_rev1.csv")     # data for propensity-score model in 1st revision
+
+# save for the MBI revision
+# dat %>% dplyr::select(-c(scale_nm, sqrrec)) %>% write_csv("~/Desktop/MBI_master_data.csv")       # 1st submission
+# dat %>% dplyr::select(-c(scale_nm, sqrrec)) %>% write_csv("~/Desktop/MBI_master_data_new.csv")   # 1st revision
+
+# save.image(file = paste0(get(my_desktop), "MBI_workspace.RData"))        # 1st revision w/o propensity score
+# save.image(file = paste0(get(my_desktop), "MBI_workspace_ps.RData"))     # 1st revision w/ propensity score
+
+
+```
+
+
+### Descriptive results and <Table 1> 
+```{r descriptive results, echo=T}
+# load(paste0(get(my_desktop), "MBI_workspace.RData"))
+load(paste0(get(my_desktop), "MBI_workspace_ps.RData"))
+
+
+# Results about ES, sample, study number
+dat2 %>% tabyl(ID) %>% tabyl(n) %>% adorn_totals()              # all ES
+dat2 %>% tabyl(authyear) %>% tabyl(n) %>% adorn_totals()
+
+dat %>% tabyl(ID) %>% tabyl(n) %>% adorn_totals()               # immediate posttest ES
+dat %>% tabyl(authyear) %>% tabyl(n) %>% adorn_totals()  
+
+dat_fp %>% tabyl(ID) %>% tabyl(n) %>% adorn_totals()            # far posttest ES 
+dat_fp %>% tabyl(authyear) %>% tabyl(n) %>% adorn_totals() 
+
+# trial-onset-to-measurement time
+mean(dat$T1, na.rm=T); sd(dat$T1, na.rm=T)
+mean(dat_fp$fptime, na.rm=T); sd(dat_fp$fptime, na.rm=T)
+
+# measure per sample
+dat2 %>% tabyl(ID) %>% tabyl(n) %>% mutate(nn_sum = sum(n_n))   # find the median using total
+dat2 %>% tabyl(ID) %>% tabyl(n) %>% mutate(n_mean = 4497 / sum(n_n))
+
+# NMainrecom per sample
+dat %>% distinct(ID, .keep_all = T) %>% select(NMainrecom) %>% mutate(med = median(NMainrecom), avg = mean(NMainrecom))
+dat %>% distinct(ID, .keep_all = T) %>% select(NMainrecom) %>% filter(NMainrecom > 1) %>% mutate(med = median(NMainrecom), avg = mean(NMainrecom))
+
+# Domain-wise sample number
+dat2 %>% filter(domain == "LS") %>% distinct(ID, .keep_all = T) %>% nrow()     # 300
+dat2 %>% filter(domain == "DA") %>% distinct(ID, .keep_all = T) %>% nrow()     # 200
+dat2 %>% filter(domain == "HIV") %>% distinct(ID, .keep_all = T) %>% nrow()    # 166
+
+# showing the proportion of two-group studies (to support the decision of using the above formula)
+dat %>% distinct(authyear, ID) %>% tabyl(authyear) %>% tabyl(n)
+
+# check outcome measures used
+dat %>% tabyl(varname) %>% tabyl(varname) %>% tabyl(n)
+
+# find research design 
+df_init <- read.csv("~/Box Sync/Zone/7_MBI_Database/MBX Stuff to Share/MBX Cleaning New Dataset Code/MBX_May2021_Sheet1.csv")
+df_init %>% tabyl(designj) 
+
+### Table 1 ------------------------------------------------------------
+# clean overall mistakes
+dat2 <- dat2 %>%
+        filter(record != "2017")
+
+# select studies missing entries in 'domain'
+dat2 %>% 
+        distinct(ID, .keep_all = T) %>% 
+        filter(!domain %in% c("LS", "HIV", "DA")) %>% 
+        select(-c(scale_nm, sqrrec)) %>% 
+        write_csv("~/Desktop/domain_NA.csv")                               # 11 NAs from 5 studies (4 LS 1 DA)
+
+dat2$domain[which(dat2$authyear == "Ingersoll et al., 2013")] <- "DA"      # CORRECTION (database updated)
+dat2$domain[which(dat2$authyear == "Lv, 2013")] <- "LS"
+dat2$domain[which(dat2$authyear == "Savoye et al., 2007 COMPLETED")] <- "LS"
+dat2$domain[which(dat2$authyear == "Wilhelmsen et al., 1986")] <- "LS"
+dat2$domain[which(dat2$authyear == "Wister et al., 2007")] <- "LS"
+
+# publication year Med, M, SD
+dat2$pubyear[which(dat2$pubyear == 201000000000)] <- 2008                  # CORRECTION (database updated)
+dat2$pubyear[which(dat2$pubyear == 20178)] <- 2017
+# dat2$authyear[which(dat2$pubyear == 201000000000)]                       # three years coded together (three reports of the same trial)
+# dat2$authyear[which(dat2$pubyear == 20178)] 
+
+dat2 %>% select(pubyear) %>% mutate(mean_yr = mean(pubyear, na.rm = T),    # mean = 2008.2
+                                    sd_yr = sd(pubyear, na.rm =T))         # sd = 7.84
+dat2 %>% select(pubyear) %>% summary()                                     # median = 2009
+
+# source type - could not verify
+
+# academic affiliation - could not verify
+
+# sample size (N)
+dat2 %>% distinct(ID, .keep_all = T) %>% select(N) %>% summary()
+dat2 %>% 
+        distinct(ID, .keep_all = T) %>% 
+        mutate(sum_N = sum(N, na.rm = T),
+               mean_N = mean(N, na.rm = T)) %>% 
+        select(sum_N, mean_N)                                             # sum = 174,728
+
+dat2 %>% 
+        distinct(ID, .keep_all = T) %>% 
+        select(authyear, N) %>% 
+        group_by(authyear) %>% 
+        summarise(N_study = sum(N, na.rm = T)) %>% 
+        ungroup() %>%
+        mutate(SD_N = sd(N_study, na.rm = T)) 
+        # summary()                                                         # median = 192; mean = 574.8
+
+# gender - cannot verify [GENDTARG?]
+
+
+# Ethnicity - cannot verify [WHITE/BLACK/ASIAN/HISPtot?] ...  HIGHSCHOOL... EDU... INCOME... 
+        
+        
+# recent MBI publications 
+# dat2 %>% 
+#         distinct(authyear, .keep_all = T) %>%
+#         # filter(clinical == "Behavioral") %>%
+#         filter(clinical == "Clinical") %>%
+#         select(pubyear, reference) %>%
+#         arrange(desc(pubyear)) %>%
+#         slice(1:100) %>% 
+#         write_csv("~/Desktop/clinical_recent.csv")
+```
+
+### bias tests for selective reporting - following Rodgers21, Pustejovsky19, and Vevea95 recommendations <Figure 2>
+```{r bias tests, echo=FALSE, fig.width=12}
+# aggregate master data sheet to sample level for selection models
+selectMod_sample_level_fun <- function(data) {
+        output <- data %>%                                                                # dat only has immediate posttest data
+        select(authyear, record, varname, outcomeID, 
+               d, dv, NMainrecom, ID,
+               d_distress, d_info, d_motiv, d_skill
+               ) %>%
+        group_by(authyear, record) %>%
+        summarise(d_avg = mean(d),
+                  dv_avg = mean(dv), 
+                  NMainrecom_avg = mean(NMainrecom), 
+                  ID = ID[1]
+                  ) %>%             
+        ungroup()
+        
+        output
+}
+
+# aggregate dat
+dat_aggr_selectMod <- selectMod_sample_level_fun(dat)
+
+## funnel plot <Figure 2>
+metafor::funnel(rma(d_avg, dv_avg, method = "REML", data = dat_aggr_selectMod), xlab = "d", level = 95, addtau2 = F)
+summary(rma(d_avg, dv_avg, method = "REML", data = dat_aggr_selectMod))
+# summary(dat_aggr_selectMod$dv_avg)                                    # verify y-axis is indeed SE not var.
+
+## Vevea&Woods95 (see 05 paper for extension to small samples): selection models testing over-representation of sig. results
+pubbias1 <- weightfunct(dat_aggr_selectMod$d_avg,  dat_aggr_selectMod$dv_avg, steps=c(.001, .025, 0.05, 0.1, 0.50, 1.00), mods = ~ dat_aggr_selectMod$NMainrecom_avg)
+
+
+## Pustejovsky19: Egger sandwich test w/ RVE and Multi-Level
+# petpeese1 <- robu (formula = d ~ se, var.eff.size=dv, studynum = ID, modelweights = "CORR", rho = 0.8, small=TRUE, data=dat)
+# petpeese2 <- robu (formula = d ~ se + dv, var.eff.size=dv, studynum = ID, modelweights = "CORR", rho = 0.8, small=TRUE, data=dat)
+
+bias_RVE1 <- robu (formula = d ~ W_sqrt, var.eff.size=dv, studynum = ID, modelweights = "CORR", rho = 0.6, small=TRUE, data=dat)
+bias_RVE2 <- robu (formula = d ~ W, var.eff.size=dv, studynum = ID, modelweights = "CORR", rho = 0.6, small=TRUE, data=dat)
+
+## Egger MLMA (Rodgers21selective_reporting, p. 147)
+# bias_ML1 <- rma.mv(d ~ se, V = dv, random = ~ 1 | authyear / ID / rowID,  data = dat, sparse = TRUE, method = "REML", test="t")
+# bias_ML2 <- rma.mv(d ~ dv, V = dv, random = ~ 1 | authyear / ID / rowID,  data = dat, sparse = TRUE, method = "REML", test="t")
+
+bias_ML1 <- rma.mv(d ~ W_sqrt, V = dv, random = ~ 1 | authyear / ID / rowID,  data = dat, sparse = TRUE, method = "REML", test="t")
+bias_ML2 <- rma.mv(d ~ W, V = dv, random = ~ 1 | authyear / ID / rowID,  data = dat, sparse = TRUE, method = "REML", test="t")
+
+# CHE approach <start> ---------------------------------------------------------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+V_mat <- impute_covariance_matrix(dat$dv, 
+                                  cluster = dat$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+
+# fit random effects working model in metafor
+petpeese1_CHE <- rma.mv(d ~ W_sqrt,
+                        V = V_mat, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = dat, 
+                        sparse = TRUE)
+
+petpeese2_CHE <- rma.mv(d ~ W,
+                        V = V_mat,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = dat,
+                        sparse = TRUE)
+
+# RVE standard errors
+CI_petpeese1_CHE <- conf_int(petpeese1_CHE, vcov = "CR2")
+CI_petpeese2_CHE <- conf_int(petpeese2_CHE, vcov = "CR2")
+test_petpeese1_CHE <- coef_test(petpeese1_CHE, vcov = "CR2")
+test_petpeese2_CHE <- coef_test(petpeese2_CHE, vcov = "CR2")
+# CHE approach <end> ---------------------------------------------------------------------------------------
+
+
+# Results ----------------------------------------------
+pubbias1; test_petpeese1_CHE; test_petpeese2_CHE  # CI_petpeese2_CHE; CI_petpeese1_CHE; 
+bias_ML1; bias_ML2
+bias_RVE1; bias_RVE2
+```
+
+### assessment of other confounds  - CHE approach NEW
+```{r control analysis, echo=FALSE}
+# CHE approach <start> ---------------------------------------------------------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+V_mat <- impute_covariance_matrix(dat$dv, 
+                                  cluster = dat$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+
+# fit random effects working model in metafor
+bc_CHE <- rma.mv(d ~ clinical + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+SS_CHE <- rma.mv(d ~ SELFSEL + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+ind_CHE <- rma.mv(d ~ individual + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+clin_CHE <- rma.mv(d ~ clinic + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+ES_CHE <- rma.mv(d ~ expertsource + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+info_CHE <- rma.mv(d ~ scai + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+skill_CHE <- rma.mv(d ~ scas + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+motiv_CHE <- rma.mv(d ~ motivation + W, V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+
+# RVE standard errors
+CI_bc_CHE <- conf_int(bc_CHE, vcov = "CR2")
+CI_SS_CHE <- conf_int(SS_CHE, vcov = "CR2")
+CI_ind_CHE <- conf_int(ind_CHE, vcov = "CR2")
+CI_clin_CHE <- conf_int(clin_CHE, vcov = "CR2")
+CI_ES_CHE <- conf_int(ES_CHE, vcov = "CR2")
+CI_info_CHE <- conf_int(info_CHE, vcov = "CR2")
+CI_skill_CHE <- conf_int(skill_CHE, vcov = "CR2")
+CI_motiv_CHE <- conf_int(motiv_CHE, vcov = "CR2")
+
+
+test_bc_CHE <- coef_test(bc_CHE, vcov = "CR2")
+test_SS_CHE <- coef_test(SS_CHE, vcov = "CR2")
+test_ind_CHE <- coef_test(ind_CHE, vcov = "CR2")
+test_clin_CHE <- coef_test(clin_CHE, vcov = "CR2")
+test_ES_CHE <- coef_test(ES_CHE, vcov = "CR2")
+test_info_CHE <- coef_test(info_CHE, vcov = "CR2")
+test_skill_CHE <- coef_test(skill_CHE, vcov = "CR2")
+test_motiv_CHE <- coef_test(motiv_CHE, vcov = "CR2")
+
+# CHE approach <end> ---------------------------------------------------------------------------------------
+# bc_CHE; SS_CHE; ind_CHE; clin_CHE; ES_CHE; info_CHE; skill_CHE; motiv_CHE;
+# CI_bc_CHE; CI_SS_CHE; CI_ind_CHE; CI_clin_CHE; CI_ES_CHE; CI_info_CHE; CI_skill_CHE; CI_motiv_CHE
+test_bc_CHE; test_SS_CHE; test_ind_CHE; test_clin_CHE; test_ES_CHE; test_info_CHE; test_skill_CHE; test_motiv_CHE
+```
+
+### effect of NMainrecom (linear vs. quadratic) - CHE approach NEW <Table 2> <Table 3>
+```{r main analysis, echo=FALSE}
+## <Table 2> Comparison of Effect of Number of Recommendations by Outcome Type (behavior vs. clinical)
+beh <- dat[which(dat$behcli == "Behavioral"),]
+clin <- dat[which(dat$behcli == "Clinical"),]
+
+
+# CHE approach <start> ---------------------------------------------------------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+V_mat_beh <- impute_covariance_matrix(vi = beh$dv, 
+                                  cluster = beh$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+V_mat_clin <- impute_covariance_matrix(vi = clin$dv, 
+                                  cluster = clin$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+
+# fit random effects working model in metafor
+bmain_numre_CHE <- rma.mv(d ~ NMainrecom + W + ps_scalar, 
+                         V = V_mat_beh, random = ~ 1 | authyear / ID / rowID, data = beh, sparse = TRUE)
+bmain_numsqrrec_CHE <- rma.mv(d ~ scale_nm + sqrrec + W + ps_scalar,
+                             V = V_mat_beh, random = ~ 1 | authyear / ID /rowID, data = beh, sparse = TRUE)
+
+cmain_numre_CHE <- rma.mv(d ~ NMainrecom + W + ps_scalar, 
+                         V = V_mat_clin, random = ~ 1 | authyear / ID / rowID, data = clin, sparse = TRUE)
+cmain_numsqrrec_CHE <- rma.mv(d ~ scale_nm + sqrrec + W + ps_scalar,
+                             V = V_mat_clin, random = ~ 1 | authyear / ID /rowID, data = clin, sparse = TRUE)
+# RVE standard errors
+CI_bmain_numre_CHE <- conf_int(bmain_numre_CHE, vcov = "CR2")
+CI_bmain_numsqrrec_CHE <- conf_int(bmain_numsqrrec_CHE, vcov = "CR2")
+CI_cmain_numre_CHE <- conf_int(cmain_numre_CHE, vcov = "CR2")
+CI_cmain_numsqrrec_CHE <- conf_int(cmain_numsqrrec_CHE, vcov = "CR2")
+
+test_bmain_numre_CHE <- coef_test(bmain_numre_CHE, vcov = "CR2")
+test_bmain_numsqrrec_CHE <- coef_test(bmain_numsqrrec_CHE, vcov = "CR2")
+test_cmain_numre_CHE <- coef_test(cmain_numre_CHE, vcov = "CR2")
+test_cmain_numsqrrec_CHE <- coef_test(cmain_numsqrrec_CHE, vcov = "CR2")
+# CHE approach <end> ---------------------------------------------------------------------------------------
+
+
+# <Table 3>
+# CHE approach <start> ---------------------------------------------------------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+V_mat <- impute_covariance_matrix(vi = dat$dv, 
+                                  cluster = dat$ID, 
+                                  r = rho, 
+                                  smooth_vi = TRUE)
+
+# fit random effects working model in metafor
+# main_numre_CHE <- rma.mv(d ~ W + NMainrecom + scai + motivation + scas + expertsource + clinical + clinic,     # original model
+main_numre_CHE <- rma.mv(d ~ W + NMainrecom + motivation + expertsource + clinical + clinic + ps_scalar,      # include ps_scalar and remove redundant terms
+                         V = V_mat, random = ~ 1 | authyear / ID / rowID, data = dat, sparse = TRUE)
+# main_numsqrrec_CHE <- rma.mv(d ~ W + scale_nm + sqrrec + scai + motivation + scas + expertsource + clinical + clinic, # original model
+main_numsqrrec_CHE <- rma.mv(d ~ W + scale_nm + sqrrec + motivation + expertsource + clinical + clinic + ps_scalar,  # include ps_scalar and remove redundant terms
+                         V = V_mat, random = ~ 1 | authyear / ID /rowID, data = dat, sparse = TRUE)
+
+# RVE standard errors
+CI_main_numre_CHE <- conf_int(main_numre_CHE, vcov = "CR2")
+CI_main_numsqrrec_CHE <- conf_int(main_numsqrrec_CHE, vcov = "CR2")
+
+test_main_numre_CHE <- coef_test(main_numre_CHE, vcov = "CR2")
+test_main_numsqrrec_CHE <- coef_test(main_numsqrrec_CHE, vcov = "CR2")
+# CHE approach <end> ---------------------------------------------------------------------------------------
+
+
+
+
+## Results --------------------------------------------
+bmain_numre_CHE; bmain_numsqrrec_CHE; cmain_numre_CHE; cmain_numsqrrec_CHE;                       # Table 2: uncorrected SE but need the observation numbers
+test_bmain_numre_CHE; test_bmain_numsqrrec_CHE; test_cmain_numre_CHE; test_cmain_numsqrrec_CHE    # Table 2
+
+main_numre_CHE; main_numsqrrec_CHE;                                                               # Table 3: uncorrected SE but need the observation numbers
+test_main_numre_CHE; test_main_numsqrrec_CHE                                                      # Table 3
+
+```
+
+## CUING ANALYSIS - aggregate to sample NEW
+In general, the aggregated approach works better revealing the signal in behavior cuing, or, in other words, behavior clustering. It is likely due to the reduction of noise in aggregation. 
+
+### Immediate behavior cuing
+(The script here needs to be run to generate the relevant datasets, although the results here are no longer used. The datasets here include the cuing and cued behavior ESs at sample level from immediate posttest.)
+```{r behavior cuing - immediate, echo=FALSE}
+# get numberofrows from dat
+num_rows <- dat %>%
+        group_by(authyear, record) %>%
+        summarise(numberofrows_avg = numberofrows[1]) %>%
+        ungroup()
+
+# filter for only cuing behavior measures
+dat_bxonly <- dat[which(dat$varname == "AU" | dat$varname == "CUSE" | dat$varname == "SEXC" | dat$varname == "DIEBEH" |
+                                 dat$varname == "DR" | dat$varname == "EX" | dat$varname == "HIVA" | dat$varname == "HIVT" |
+                                 dat$varname == "HIVTX" | dat$varname == "MA" | dat$varname == "TOBB" | dat$varname == "ABS" |
+                                 dat$varname == "RISEXBEH" | dat$varname == "SEX" | dat$varname == "CONPRO" | dat$varname == "SUBS"), ]
+
+
+# aggregate master data sheet to sample level, matching that of the cuing behaviors, and add numberofrows
+sample_level_fun <- function(filter_criteria) {
+        output <- dat_bxonly %>% 
+        select(authyear, record, varname, outcomeID, d, dv, NMainrecom, ID, T1, W) %>%
+        filter(varname %in% filter_criteria) %>%
+        group_by(authyear, record) %>%
+        summarise(d_avg = mean(d),
+                  dv_avg = mean(dv),
+                  NMainrecom_avg = mean(NMainrecom), 
+                  ID = ID[1],
+                  fptime = mean(T1, na.rm=T),                     # time (day) between baseline and immediate posttest
+                  W_avg = mean(W)
+                  ) %>%             
+        ungroup() %>%
+        left_join(num_rows, by=c("authyear", "record"))
+        
+        output
+}
+
+# exercise
+dat_noex <- sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                # "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                "DIEBEH",                                                                 # diet
+                "TOBB"                                                                    # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+
+
+
+g <- dat[which(dat$varname == "EX"), ]                                                                  # select 'exercise' rows at immediate posttest    
+# g <-g[-c(3,5:27,29:length(g))]
+g <-g[c("authyear","record","outcomeID", "d")]
+g <- g %>% rename(d_ex = d)
+# g_w <- reshape(g, timevar = "outcomeID", idvar = c("authyear","record"), direction = "wide")            # aggregate over outcomeID (not varname given 'EX') 
+g_w <- g %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d_ex")
+# g_w$exd <- rowMeans(g_w[,3:8], na.rm=TRUE)
+g_w$exd <- rowMeans(g_w[,grepl("n\\d+", names(g_w))], na.rm=T)
+# g_w <- g_w[-c(3:8)]
+g_w <- g_w[c("authyear","record","exd")]
+dat_noex <- left_join(dat_noex, g_w, by=c("authyear","record"))                                         # join at sample-specific d level
+
+
+# alcohol use 
+dat_noau <- sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                # "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                "DR", "SUBS",                                                             # substance use
+                # "DIEBEH",                                                                 # diet
+                # "TOBB",                                                                   # smoking
+                "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+AU <- dat[which(dat$varname == "AU"),]
+# AU <-AU[-c(3,5:27,29:length(AU))]
+AU <-AU[c("authyear","record","outcomeID", "d")]
+AU <- AU %>% rename(d_au = d)
+# AU_w <- reshape(AU,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+AU_w <- AU %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d_au")
+# AU_w$aud <- rowMeans(AU_w[,3:9],na.rm=TRUE)
+AU_w$aud <- rowMeans(AU_w[,grepl("n\\d+", names(AU_w))], na.rm=T)
+# AU_w <- AU_w[-c(3:9)]
+AU_w <- AU_w[c("authyear","record","aud")]
+dat_noau <- left_join(dat_noau,AU_w,by=c("authyear","record"))
+
+
+# substance use
+dat_nodr <- sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                # "EX",                                                                     # exercise
+                "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                # "DIEBEH",                                                                 # diet
+                # "TOBB",                                                                   # smoking
+                "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+DR <- dat[which(dat$varname == "DR" | dat$varname == "SUBS"),]                 # aggregate twice over varname, outcomeID
+# DR <-DR[-c(5:27,29:length(DR))]
+DR <- DR[c("authyear","record","varname","outcomeID", "d")]
+# DR_w <- reshape(DR,timevar = "varname",idvar = c("authyear","record","outcomeID"),direction = "wide")
+DR_w <- DR %>% pivot_wider(id_cols = c("authyear","record","outcomeID"), names_from = "varname", values_from = "d")
+# DR_w$d <- rowMeans(DR_w[, 4:5],na.rm=TRUE)
+DR_w$d <- rowMeans(DR_w[,(names(DR_w) %in% c("DR", "SUBS"))], na.rm=T)
+# DR_w <- DR_w[-c(4:5)]
+DR_w <- DR_w[!names(DR_w) %in% c("DR", "SUBS")]
+# DR_w <- reshape(DR_w,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+DR_w <- DR_w %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d")
+# DR_w$subd <- rowMeans(DR_w[,3:14],na.rm=TRUE)
+DR_w$subd <- rowMeans(DR_w[,grepl("^n\\d+", names(DR_w))], na.rm=T)
+# DR_w <- DR_w[-c(3:14)]
+DR_w <- DR_w[c("authyear","record","subd")]
+dat_nodr <- left_join(dat_nodr,DR_w,by=c("authyear","record"))
+
+
+# diet
+dat_nodie <- sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                # "DIEBEH",                                                                 # diet
+                "TOBB"                                                                    # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+h <- dat[which(dat$varname == "DIEBEH"),]
+# h <-h[-c(3,5:27,29:length(h))]
+h <- h[c("authyear","record","outcomeID","d")]
+h <- h %>% rename(d_diet = d)
+# h_w <- reshape(h,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+h_w <- h %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d_diet")
+# h_w$dietd <- rowMeans(h_w[,3:11],na.rm=TRUE)
+h_w$dietd <- rowMeans(h_w[,grepl("^n\\d+", names(h_w))], na.rm=T)
+# h_w <- h_w[-c(3:11)]
+h_w <- h_w[c("authyear","record","dietd")]
+dat_nodie <- left_join(dat_nodie,h_w,by=c("authyear","record"))
+
+
+# smoking
+dat_notobb <- sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                "DIEBEH"                                                                  # diet
+                # "TOBB",                                                                   # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+tobb <- dat[which(dat$varname == "TOBB"),]
+# tobb <-tobb[-c(3,5:27,29:length(tobb))]
+tobb <- tobb[c("authyear","record","outcomeID","d")]
+# tobb_w <- reshape(tobb,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+tobb_w <- tobb %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d")
+# tobb_w$tobbd <- rowMeans(tobb_w[,3:7],na.rm=TRUE)
+tobb_w$tobbd <- rowMeans(tobb_w[,grepl("^n\\d+", names(tobb_w))], na.rm=T)
+tobb_w <- tobb_w[c("authyear","record","tobbd")]
+dat_notobb <- left_join(dat_notobb,tobb_w,by=c("authyear","record"))
+
+
+# HIV
+dat_nosex <- sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                # "EX",                                                                     # exercise
+                "AU",                                                                     # alcohol use
+                "DR", "SUBS"                                                              # substance use
+                # "DIEBEH",                                                                 # diet
+                # "TOBB",                                                                   # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+sex <- dat[which(dat$varname == "CUSE" | dat$varname == "SEX" | dat$varname == "SEXC" | dat$varname == "ABS" | dat$varname == "CONPRO" | dat$varname == "HIVA" | dat$varname == "HIVT" | dat$varname == "HIVTX"),]
+# sex <-sex[-c(5:27,29:length(sex))]
+sex <- sex[c("authyear","record","varname","outcomeID","d")]
+# sex_w <- reshape(sex,timevar = "varname",idvar = c("authyear","record","outcomeID"),direction = "wide")
+sex_w <- sex %>% pivot_wider(id_cols = c("authyear","record","outcomeID"), names_from = "varname", values_from = "d")
+# sex_w$d <- rowMeans(sex_w[, 4:11],na.rm=TRUE)
+sex_w$d <- rowMeans(sex_w[,(names(sex_w) %in% c("CUSE","SEX","HIVTX","HIVT","ABS","CONPRO","HIVA","SEXC"))], na.rm=T)
+# sex_w <- sex_w[-c(4:11)]
+sex_w <- sex_w[!names(sex_w) %in% c("CUSE","SEX","HIVTX","HIVT","ABS","CONPRO","HIVA","SEXC")]
+# sex_w <- reshape(sex_w,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+sex_w <- sex_w %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d")
+# sex_w$sexd <- rowMeans(sex_w[,3:12],na.rm=TRUE)
+sex_w$sexd <- rowMeans(sex_w[,grepl("^n\\d+", names(sex_w))], na.rm=T)
+sex_w <- sex_w[c("authyear","record","sexd")]
+dat_nosex <- left_join(dat_nosex,sex_w,by=c("authyear","record"))
+```
+
+### Delayed behavior cuing
+(The script here needs to be run to generate the relevant datasets, although the results here are no longer used. The datasets here include the cuing and cued behavior ESs at sample level from delayed posttest.)
+```{r cuing analysis - aggregate, echo=FALSE}
+# Cuing Behaviors
+dat_fp_bxonly <- dat_fp2[which(dat_fp2$varname == "AU" | dat_fp2$varname == "CUSE" | dat_fp2$varname == "SEXC" | dat_fp2$varname == "DIEBEH" |
+                                 dat_fp2$varname == "DR" | dat_fp2$varname == "EX" | dat_fp2$varname == "HIVA" | dat_fp2$varname == "HIVT" |
+                                 dat_fp2$varname == "HIVTX" | dat_fp2$varname == "MA" | dat_fp2$varname == "TOBB" | dat_fp2$varname == "ABS" |
+                                 dat_fp2$varname == "RISEXBEH" | dat_fp2$varname == "SEX" | dat_fp2$varname == "CONPRO" | dat_fp2$varname == "SUBS"), ]
+
+# get numberofrows from dat
+num_rows <- dat %>%
+        group_by(authyear, record) %>%
+        summarise(numberofrows_avg = numberofrows[1]) %>%
+        ungroup()
+
+# aggregate master data sheet to sample level, matching that of the cuing behaviors, and add numberofrows
+fp_sample_level_fun <- function(filter_criteria) {
+        output <- dat_fp_bxonly %>% 
+        select(authyear, record, varname, outcomeID, d, d_w2, dv, NMainrecom, ID, fptime, W) %>%
+        filter(varname %in% filter_criteria) %>%
+        group_by(authyear, record) %>%
+        summarise(d_avg = mean(d),
+                  d_w2_avg = mean(d_w2), 
+                  dv_avg = mean(dv),
+                  NMainrecom_avg = mean(NMainrecom), 
+                  ID = ID[1],
+                  fptime = mean(fptime, na.rm=T),
+                  W_avg = mean(W)
+                  ) %>%             
+        ungroup() %>%
+        left_join(num_rows, by=c("authyear", "record"))
+        
+        output
+}
+
+
+# exercise
+dat_fp_noex2 <- fp_sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                # "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                "DIEBEH",                                                                 # diet
+                "TOBB"                                                                   # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+g <- dat[which(dat$varname == "EX"), ]
+# g <-g[-c(3,5:27,29:length(g))]
+g <- g[c("authyear","record","outcomeID","d")]
+g <- g %>% rename(d_ex = d)
+# g_w <- reshape(g,timevar = "outcomeID", idvar = c("authyear","record"), direction = "wide")
+g_w <- g %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d_ex")
+# g_w$exd <- rowMeans(g_w[,3:8],na.rm=TRUE)
+g_w$exd <- rowMeans(g_w[,grepl("^n\\d+", names(g_w))], na.rm=T)
+# g_w <- g_w[-c(3:8)]
+g_w <- g_w[c("authyear","record","exd")]
+dat_fp_noex2 <- left_join(dat_fp_noex2, g_w, by=c("authyear","record"))
+
+     
+# alcohol use 
+dat_fp_noau2 <- fp_sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                # "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                "DR", "SUBS",                                                             # substance use
+                # "DIEBEH",                                                                 # diet
+                # "TOBB",                                                                   # smoking
+                "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+AU <- dat[which(dat$varname == "AU"),]
+# AU <-AU[-c(3,5:27,29:length(AU))]
+AU <- AU[c("authyear","record","outcomeID","d")]
+AU <- AU%>% rename(d_au = d)
+# AU_w <- reshape(AU,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+AU_w <- AU %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d_au")
+# AU_w$aud <- rowMeans(AU_w[,3:9],na.rm=TRUE)
+AU_w$aud <- rowMeans(AU_w[,grepl("^n\\d+", names(AU_w))], na.rm=T)
+# AU_w <- AU_w[-c(3:9)]
+AU_w <- AU_w[c("authyear","record","aud")]
+dat_fp_noau2 <- left_join(dat_fp_noau2, AU_w, by=c("authyear","record"))
+
+
+# substance use
+dat_fp_nodr2 <- fp_sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                # "EX",                                                                     # exercise
+                "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                # "DIEBEH",                                                                 # diet
+                # "TOBB",                                                                   # smoking
+                "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+# DR <- dat[which(dat$varname == "DR" | dat$varname == "SUBS"),]
+# DR <-DR[-c(5:27,29:length(DR))]
+# DR_w <- reshape(DR,timevar = "varname",idvar = c("authyear","record","outcomeID"),direction = "wide")
+# DR_w$d <- rowMeans(DR_w[, 4:5],na.rm=TRUE)
+# DR_w <- DR_w[-c(4:5)]
+# DR_w <- reshape(DR_w,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+# DR_w$subd <- rowMeans(DR_w[,3:14],na.rm=TRUE)
+# DR_w <- DR_w[-c(3:14)]
+DR <- dat[which(dat$varname == "DR" | dat$varname == "SUBS"),]                       # aggregate twice over varname, outcomeID
+DR <- DR[c("authyear","record","varname","outcomeID", "d")]
+DR_w <- DR %>% pivot_wider(id_cols = c("authyear","record","outcomeID"), names_from = "varname", values_from = "d")
+DR_w$d <- rowMeans(DR_w[,(names(DR_w) %in% c("DR", "SUBS"))], na.rm=T)
+DR_w <- DR_w[!names(DR_w) %in% c("DR", "SUBS")]
+DR_w <- DR_w %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d")
+DR_w$subd <- rowMeans(DR_w[,grepl("^n\\d+", names(DR_w))], na.rm=T)
+DR_w <- DR_w[c("authyear","record","subd")]
+dat_fp_nodr2 <- left_join(dat_fp_nodr2, DR_w, by=c("authyear","record"))
+
+
+
+
+
+
+# diet
+dat_fp_nodie2 <- fp_sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------  
+                "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                # "DIEBEH",                                                                 # diet
+                "TOBB"                                                                   # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+h <- dat[which(dat$varname == "DIEBEH"),]
+# h <-h[-c(3,5:27,29:length(h))]
+# h <- h%>% rename(d_diet = d)
+# h_w <- reshape(h,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+# h_w$dietd <- rowMeans(h_w[,3:11],na.rm=TRUE)
+# h_w <- h_w[-c(3:11)]
+
+h <- h[c("authyear","record","outcomeID","d")]
+h <- h %>% rename(d_diet = d)
+h_w <- h %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d_diet")
+h_w$dietd <- rowMeans(h_w[,grepl("^n\\d+", names(h_w))], na.rm=T)
+h_w <- h_w[c("authyear","record","dietd")]
+dat_fp_nodie2 <- left_join(dat_fp_nodie2, h_w, by=c("authyear","record"))
+
+
+
+# smoking
+dat_fp_notobb2 <- fp_sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------
+                "EX",                                                                     # exercise
+                # "AU",                                                                     # alcohol use
+                # "DR", "SUBS",                                                             # substance use
+                "DIEBEH"                                                                 # diet
+                # "TOBB",                                                                   # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+tobb <- dat[which(dat$varname == "TOBB"),]
+# tobb <-tobb[-c(3,5:27,29:length(tobb))]
+# tobb_w <- reshape(tobb,timevar = "outcomeID",idvar = c("authyear","record"),direction = "wide")
+# tobb_w$tobbd <- rowMeans(tobb_w[,3:7],na.rm=TRUE)
+# tobb_w <- tobb_w[-c(3:7)]
+tobb <- tobb[c("authyear","record","outcomeID","d")]
+tobb_w <- tobb %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d")
+tobb_w$tobbd <- rowMeans(tobb_w[,grepl("^n\\d+", names(tobb_w))], na.rm=T)
+tobb_w <- tobb_w[c("authyear","record","tobbd")]
+dat_fp_notobb2 <- left_join(dat_fp_notobb2, tobb_w, by=c("authyear","record"))
+
+
+# HIV
+dat_fp_nosex2 <- fp_sample_level_fun(
+        c(
+# restricting categories of behavior based on Dolores' categorization --------
+                # "EX",                                                                     # exercise
+                "AU",                                                                     # alcohol use
+                "DR", "SUBS"                                                             # substance use
+                # "DIEBEH",                                                                 # diet
+                # "TOBB",                                                                   # smoking
+                # "CUSE", "SEX", "SEXC", "ABS", "CONPRO", "HIVA", "HIVT", "HIVTX"           # HIV
+        )
+)
+sex <- dat[which(dat$varname == "CUSE" | dat$varname == "SEX" | dat$varname == "SEXC" | dat$varname == "ABS" | dat$varname == "CONPRO" | dat$varname == "HIVA" | dat$varname == "HIVT" | dat$varname == "HIVTX"), ]
+# sex <-sex[-c(5:27,29:length(sex))]
+# sex_w <- reshape(sex,timevar = "varname",idvar = c("authyear","record","outcomeID"),direction = "wide")
+# sex_w$d <- rowMeans(sex_w[, 4:11], na.rm=TRUE)
+# sex_w <- sex_w[-c(4:11)]
+# sex_w <- reshape(sex_w,timevar = "outcomeID", idvar = c("authyear","record"), direction = "wide")
+# sex_w$sexd <- rowMeans(sex_w[, 3:12], na.rm=TRUE)
+# sex_w <- sex_w[-c(3:12)]
+sex <- sex[c("authyear","record","varname","outcomeID","d")]
+sex_w <- sex %>% pivot_wider(id_cols = c("authyear","record","outcomeID"), names_from = "varname", values_from = "d")
+sex_w$d <- rowMeans(sex_w[,(names(sex_w) %in% c("CUSE","SEX","HIVTX","HIVT","ABS","CONPRO","HIVA","SEXC"))], na.rm=T)
+sex_w <- sex_w[!names(sex_w) %in% c("CUSE","SEX","HIVTX","HIVT","ABS","CONPRO","HIVA","SEXC")]
+sex_w <- sex_w %>% pivot_wider(id_cols = c("authyear","record"), names_from = "outcomeID", values_from = "d")
+sex_w$sexd <- rowMeans(sex_w[,grepl("^n\\d+", names(sex_w))], na.rm=T)
+sex_w <- sex_w[c("authyear","record","sexd")]
+dat_fp_nosex2 <- left_join(dat_fp_nosex2, sex_w, by=c("authyear","record"))
+```
+
+### Merge immedate and delayed within-area behavior cuing <Table 4>
+Suggested by Dolores, I added dalayed posttest observations as new rows in the dataspread sheet of the immediate posttest observations and used CHE approach.
+```{r merge immedate and delayed behavior cuing, echo=F}
+# data merging function ---------------------
+merge_fun <- function(delayed_df, immediate_df) {
+        merge0 <- delayed_df %>%
+                select(-d_w2_avg) %>% 
+                mutate(category = "dalayed")
+        merge <- immediate_df %>%
+                mutate(category = "immediate") %>%
+                bind_rows(merge0) %>%
+                mutate(rowID = row_number(),
+                       ln_fptime = log(1+fptime))
+        merge
+}
+
+# Merge immediate and delayed posttest data containing cuing and cued behavior ES ----------------------
+merge_ex <- merge_fun(dat_fp_noex2, dat_noex)
+merge_die <- merge_fun(dat_fp_nodie2, dat_nodie)
+merge_tobb <- merge_fun(dat_fp_notobb2, dat_notobb)
+merge_sex <- merge_fun(dat_fp_nosex2, dat_nosex)
+merge_au <- merge_fun(dat_fp_noau2, dat_noau)
+merge_dr <- merge_fun(dat_fp_nodr2, dat_nodr)
+
+
+# CHE approach <start> ---------------------------------------------------------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+V_mat_ex <- impute_covariance_matrix(merge_ex$dv_avg, cluster = merge_ex$ID, r = rho, smooth_vi = TRUE)
+V_mat_die <- impute_covariance_matrix(merge_die$dv_avg, cluster = merge_die$ID, r = rho, smooth_vi = TRUE)
+V_mat_tobb <- impute_covariance_matrix(merge_tobb$dv_avg, cluster = merge_tobb$ID, r = rho, smooth_vi = TRUE)
+V_mat_sex <- impute_covariance_matrix(merge_sex$dv_avg, cluster = merge_sex$ID, r = rho, smooth_vi = TRUE)
+V_mat_au <- impute_covariance_matrix(merge_au$dv_avg, cluster = merge_au$ID, r = rho, smooth_vi = TRUE)
+V_mat_dr <- impute_covariance_matrix(merge_dr$dv_avg, cluster = merge_dr$ID, r = rho, smooth_vi = TRUE)
+
+
+# no fptime
+merge_ex_CHE <- rma.mv(d_avg ~ W_avg + exd,
+                        V = V_mat_ex, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_ex, 
+                        sparse = TRUE)
+merge_die_CHE <- rma.mv(d_avg ~ W_avg + dietd,
+                        V = V_mat_die, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_die, 
+                        sparse = TRUE)
+merge_tobb_CHE <- rma.mv(d_avg ~ W_avg + tobbd,
+                        V = V_mat_tobb, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_tobb, 
+                        sparse = TRUE)
+merge_sex_CHE <- rma.mv(d_avg ~ W_avg + sexd,
+                        V = V_mat_sex, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_sex, 
+                        sparse = TRUE)
+merge_au_CHE <- rma.mv(d_avg ~ W_avg + aud,
+                        V = V_mat_au, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_au, 
+                        sparse = TRUE)
+merge_dr_CHE <- rma.mv(d_avg ~ W_avg + subd,
+                        V = V_mat_dr, 
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = merge_dr, 
+                        sparse = TRUE)
+
+# RVE standard errors
+CI_merge_ex_CHE <- conf_int(merge_ex_CHE, vcov = "CR2")
+CI_merge_die_CHE <- conf_int(merge_die_CHE, vcov = "CR2")
+CI_merge_tobb_CHE <- conf_int(merge_tobb_CHE, vcov = "CR2")
+CI_merge_sex_CHE <- conf_int(merge_sex_CHE, vcov = "CR2")
+CI_merge_au_CHE <- conf_int(merge_au_CHE, vcov = "CR2")
+CI_merge_dr_CHE <- conf_int(merge_dr_CHE, vcov = "CR2")
+
+test_merge_ex_CHE <- coef_test(merge_ex_CHE, vcov = "CR2")
+test_merge_die_CHE <- coef_test(merge_die_CHE, vcov = "CR2")
+test_merge_tobb_CHE <- coef_test(merge_tobb_CHE, vcov = "CR2")
+test_merge_sex_CHE <- coef_test(merge_sex_CHE, vcov = "CR2")
+test_merge_au_CHE <- coef_test(merge_au_CHE, vcov = "CR2")
+test_merge_dr_CHE <- coef_test(merge_dr_CHE, vcov = "CR2")
+
+# CHE approach <end> ---------------------------------------------------------------------------------------
+# CI_merge_ex_CHE; CI_merge_die_CHE; CI_merge_tobb_CHE; CI_merge_sex_CHE; CI_merge_au_CHE; CI_merge_dr_CHE
+merge_ex_CHE; merge_die_CHE; merge_tobb_CHE; merge_sex_CHE; merge_au_CHE; merge_dr_CHE
+test_merge_sex_CHE; test_merge_au_CHE; test_merge_dr_CHE; test_merge_ex_CHE; test_merge_die_CHE; test_merge_tobb_CHE
+```
+
+
+## MEDIATION ANALYSIS - aggregate to sample NEW
+### Immediate mediational
+```{r mediational analysis - new, echo=FALSE}
+# aggregate master data sheet to sample level, matching that of the cuing behaviors, and add numberofrows
+mediation_sample_level_fun <- function(data) {
+        output <- data %>%                                                                # dat only has immediate posttest data
+        select(authyear, record, varname, outcomeID, 
+               d, dv, NMainrecom, ID, W,
+               d_distress, d_info, d_motiv, d_skill,
+               T1
+               ) %>%
+        group_by(authyear, record) %>%
+        summarise(d_avg = mean(d),
+                  dv_avg = mean(dv), 
+                  NMainrecom_avg = mean(NMainrecom), 
+                  ID = ID[1],
+                  W_avg = mean(W),
+                  d_distress = d_distress[1],                                             # the 4 mediators
+                  d_info = d_info[1], 
+                  d_motiv = d_motiv[1], 
+                  d_skill = d_skill[1],
+                  fptime = mean(T1)
+                  ) %>%             
+        ungroup() 
+        
+        output
+}
+
+# aggregate dat
+dat_aggr <- mediation_sample_level_fun(dat)
+```
+
+### Delayed mediation  
+```{r delayed mediation, echo=FALSE}
+fp_mediation_sample_level_fun <- function(data) {
+        output <- data %>%                                                                # dat only has immediate posttest data
+        select(authyear, record, varname, outcomeID, 
+               d, dv, NMainrecom, ID, W,
+               d_distress, d_info, d_motiv, d_skill,
+               fptime
+               ) %>%
+        group_by(authyear, record) %>%
+        summarise(d_avg = mean(d),
+                  dv_avg = mean(dv),
+                  NMainrecom_avg = mean(NMainrecom), 
+                  ID = ID[1],
+                  W_avg = mean(W),
+                  d_distress = d_distress[1],                                             # the 4 mediators
+                  d_info = d_info[1], 
+                  d_motiv = d_motiv[1], 
+                  d_skill = d_skill[1],
+                  fptime = mean(fptime)
+                  ) %>%             
+        ungroup() 
+        
+        output
+}
+
+# aggregate dat
+dat_fp2_aggr <- fp_mediation_sample_level_fun(dat_fp2)
+```
+
+### combine immediate and delayed in testing mediation (while controlling for logTime) - suggested by Dolores in V3 draft
+```{r combined immediate and delayed in mediation, echo = F}
+# data merging function ---------------------
+merge_fun2 <- function(delayed_df, immediate_df) {
+        merge0 <- delayed_df %>%
+                mutate(category = "dalayed")
+        merge <- immediate_df %>%
+                mutate(category = "immediate") %>%
+                bind_rows(merge0) %>%
+                mutate(rowID = row_number(),
+                       ln_fptime = log(1+fptime))
+        merge
+}  
+
+dat_combine <- merge_fun2(dat_fp2_aggr, dat_aggr) %>%
+        mutate(Z_fptime = scale(fptime+1))
+
+# CHE models -------------------------------------
+# constant sampling correlation assumption
+rho <- 0.6
+
+# constant sampling correlation working model
+wb_data <- dat_combine %>% filter(!is.na(d_distress))
+V_mat_wb <- impute_covariance_matrix(wb_data$dv_avg, cluster = wb_data$ID, r = rho, smooth_vi = TRUE)
+
+info_data <- dat_combine %>% filter(!is.na(d_info))
+V_mat_info <- impute_covariance_matrix(info_data$dv_avg, cluster = info_data$ID, r = rho, smooth_vi = TRUE)
+
+motiv_data <- dat_combine %>% filter(!is.na(d_motiv))
+V_mat_motiv <- impute_covariance_matrix(motiv_data$dv_avg, cluster = motiv_data$ID, r = rho, smooth_vi = TRUE)
+
+skill_data <- dat_combine %>% filter(!is.na(d_skill))
+V_mat_skill <- impute_covariance_matrix(skill_data$dv_avg, cluster = skill_data$ID, r = rho, smooth_vi = TRUE)
+
+# choose which time form to use (log or not)
+# time_form <- "fptime"
+# time_form <- "ln_fptime"
+time_form <- "Z_fptime"
+
+# psyc well-being
+merge_wb_CHE1 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_wb_CHE1 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg,
+                        V = V_mat_wb,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = wb_data,
+                        sparse = TRUE)
+merge_wb_CHE2 <- rma.mv(d_distress ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_wb_CHE2 <- rma.mv(d_distress ~ W_avg + NMainrecom_avg,                        
+                        V = V_mat_wb,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = wb_data,
+                        sparse = TRUE)
+merge_wb_CHE3 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg + d_distress,
+# merge_wb_CHE3 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg + d_distress,
+                        V = V_mat_wb,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = wb_data,
+                        sparse = TRUE)
+
+CI_merge_wb_CHE1 <- conf_int(merge_wb_CHE1, vcov = "CR2")
+CI_merge_wb_CHE2 <- conf_int(merge_wb_CHE2, vcov = "CR2")
+CI_merge_wb_CHE3 <- conf_int(merge_wb_CHE3, vcov = "CR2")
+test_merge_wb_CHE1 <- coef_test(merge_wb_CHE1, vcov = "CR2")
+test_merge_wb_CHE2 <- coef_test(merge_wb_CHE2, vcov = "CR2")
+test_merge_wb_CHE3 <- coef_test(merge_wb_CHE3, vcov = "CR2")
+
+# information
+merge_info_CHE1 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_info_CHE1 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg,
+                        V = V_mat_info,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = info_data,
+                        sparse = TRUE)
+merge_info_CHE2 <- rma.mv(d_info ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_info_CHE2 <- rma.mv(d_info ~ W_avg + NMainrecom_avg,
+                        V = V_mat_info,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = info_data,
+                        sparse = TRUE)
+merge_info_CHE3 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg + d_info,
+# merge_info_CHE3 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg + d_info,
+                        V = V_mat_info,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = info_data,
+                        sparse = TRUE)
+
+CI_merge_info_CHE1 <- conf_int(merge_info_CHE1, vcov = "CR2")
+CI_merge_info_CHE2 <- conf_int(merge_info_CHE2, vcov = "CR2")
+CI_merge_info_CHE3 <- conf_int(merge_info_CHE3, vcov = "CR2")
+test_merge_info_CHE1 <- coef_test(merge_info_CHE1, vcov = "CR2")
+test_merge_info_CHE2 <- coef_test(merge_info_CHE2, vcov = "CR2")
+test_merge_info_CHE3 <- coef_test(merge_info_CHE3, vcov = "CR2")
+
+# motivation
+merge_motiv_CHE1 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_motiv_CHE1 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg,
+                        V = V_mat_motiv,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = motiv_data,
+                        sparse = TRUE)
+merge_motiv_CHE2 <- rma.mv(d_motiv ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_motiv_CHE2 <- rma.mv(d_motiv ~ W_avg + NMainrecom_avg,
+                        V = V_mat_motiv,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = motiv_data,
+                        sparse = TRUE)
+merge_motiv_CHE3 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg + d_motiv,
+# merge_motiv_CHE3 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg + d_motiv,
+                        V = V_mat_motiv,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = motiv_data,
+                        sparse = TRUE)
+
+CI_merge_motiv_CHE1 <- conf_int(merge_motiv_CHE1, vcov = "CR2")
+CI_merge_motiv_CHE2 <- conf_int(merge_motiv_CHE2, vcov = "CR2")
+CI_merge_motiv_CHE3 <- conf_int(merge_motiv_CHE3, vcov = "CR2")
+test_merge_motiv_CHE1 <- coef_test(merge_motiv_CHE1, vcov = "CR2")
+test_merge_motiv_CHE2 <- coef_test(merge_motiv_CHE2, vcov = "CR2")
+test_merge_motiv_CHE3 <- coef_test(merge_motiv_CHE3, vcov = "CR2")
+
+# psychological skill
+merge_skill_CHE1 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_skill_CHE1 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg,
+                        V = V_mat_skill,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = skill_data,
+                        sparse = TRUE)
+merge_skill_CHE2 <- rma.mv(d_skill ~ W_avg + get(time_form) + NMainrecom_avg,
+# merge_skill_CHE2 <- rma.mv(d_skill ~ W_avg + NMainrecom_avg,
+                        V = V_mat_skill,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = skill_data,
+                        sparse = TRUE)
+merge_skill_CHE3 <- rma.mv(d_avg ~ W_avg + get(time_form) + NMainrecom_avg + d_skill,
+# merge_skill_CHE3 <- rma.mv(d_avg ~ W_avg + NMainrecom_avg + d_skill,
+                        V = V_mat_skill,
+                        random = ~ 1 | authyear / ID / rowID,
+                        data = skill_data,
+                        sparse = TRUE)
+
+CI_merge_skill_CHE1 <- conf_int(merge_skill_CHE1, vcov = "CR2")
+CI_merge_skill_CHE2 <- conf_int(merge_skill_CHE2, vcov = "CR2")
+CI_merge_skill_CHE3 <- conf_int(merge_skill_CHE3, vcov = "CR2")
+test_merge_skill_CHE1 <- coef_test(merge_skill_CHE1, vcov = "CR2")
+test_merge_skill_CHE2 <- coef_test(merge_skill_CHE2, vcov = "CR2")
+test_merge_skill_CHE3 <- coef_test(merge_skill_CHE3, vcov = "CR2")
+
+### Results -----------------------------------------------------------------
+merge_wb_CHE1; merge_wb_CHE2; merge_wb_CHE3
+test_merge_wb_CHE1; test_merge_wb_CHE2; test_merge_wb_CHE3
+
+merge_info_CHE1; merge_info_CHE2; merge_info_CHE3
+test_merge_info_CHE1; test_merge_info_CHE2; test_merge_info_CHE3
+
+merge_motiv_CHE1; merge_motiv_CHE2; merge_motiv_CHE3
+test_merge_motiv_CHE1; test_merge_motiv_CHE2; test_merge_motiv_CHE3
+
+merge_skill_CHE1; merge_skill_CHE2; merge_skill_CHE3
+test_merge_skill_CHE1; test_merge_skill_CHE2; test_merge_skill_CHE3
+
+```
+
+### Directly test mediation strength in immediate posttest
+```{r Sobel & Bootstrap CI test, echo = F}
+## Sobel test ----------------
+bda::mediation.test(wb_data$d_distress, wb_data$NMainrecom_avg, wb_data$d_avg)
+bda::mediation.test(info_data$d_info, info_data$NMainrecom_avg, info_data$d_avg)
+
+## use lavaan to fit path models -----------------
+library(lavaan)
+set.seed(55555)
+# well-being; := defined variables 
+wb_path <- '
+d_distress ~ a*NMainrecom_avg + W_avg
+d_avg ~ c*NMainrecom_avg + b*d_distress
+
+indirect := a*b    
+direct := c
+total := c + a*b
+'
+# used wb_path2 to improve overall model fit by removing W_avg
+wb_path2 <- '
+d_distress ~ a*NMainrecom_avg
+d_avg ~ c*NMainrecom_avg + b*d_distress
+
+indirect := a*b    
+direct := c
+total := c + a*b
+'
+wb_results <- sem(wb_path2, wb_data, se = "bootstrap", bootstrap = 5000)  # bootstrapping SE
+wb_results2 <- sem(wb_path2, wb_data, se = "robust.huber.white")          # MLR estimator: ML in combination with Huber-White robust standard errors and a robust test statistic
+summary(wb_results2, fit.measures = T, rsquare = T, standardized = T)  # indirect effect is sig. w/ consistent results using different SE calculations
+
+# information
+info_path <- '
+d_info ~ a*NMainrecom_avg + W_avg
+d_avg ~ c*NMainrecom_avg + b*d_info
+
+indirect := a*b    # := defined variables 
+direct := c
+total := c + a*b
+'
+info_path2 <- '
+d_info ~ a*NMainrecom_avg
+d_avg ~ c*NMainrecom_avg + b*d_info
+
+indirect := a*b    # := defined variables 
+direct := c
+total := c + a*b
+'
+info_results <- sem(info_path2, info_data, se = "bootstrap", bootstrap = 5000)
+info_results2 <- sem(info_path2, info_data, se = "robust.huber.white")  #  cluster = info_data$ID,
+summary(info_results2, fit.measures = T, rsquare = T, standardized = T) # indirect effect is nonsig. w/ consistent results using different SE calculations
+```
+

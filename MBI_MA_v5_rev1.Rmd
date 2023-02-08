@@ -15,12 +15,7 @@ options(dplyr.print_min=Inf,
         scipen=999999)
 ```
 
-### About v5
-This version corresponds to v4 MBI MA manuscript.
 
-* Further info about variable 'T1' from Marta: Not all the reports give us such info, but we try to obtain it. You should count from the day of the intervention, or from the last day of the intervention, through the day of the next measurement (maybe 3 months, then 90 days). We did not use to count from the baseline day because not all the participants completed the intervention.   
-
-### Data pre-proc  - UPDATED
 ```{r preproc, echo=F}
 rm(list=ls())
 library(metafor)
@@ -39,51 +34,54 @@ library(janitor)
 library(bda)                               # mediation.test(), Sobel test
 library(lavaan)
 
-win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_master/"                             # 1st submission path
-mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_master/"
+# win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_master/"                             # 1st submission path
+# mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_master/"
 
 # win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"                   # 1st revision path
 # mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"
 # mac2 <- "~/Box Sync/Zone/7_MBI_Database/PS_Model/"
 
-win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
-mac_desktop <- "~/Desktop/"
+# win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
+# mac_desktop <- "~/Desktop/"
 
-my_computer <- 
-  "win"
+# my_computer <- 
+  # "win"
   # "mac"
-my_desktop <- paste0(my_computer, "_desktop")
+# my_desktop <- paste0(my_computer, "_desktop")
 
 select <- dplyr::select
 ```
 
 
 ```{r read_data}
+rho <- 
+  "05"
+  # "04"
+  # "06"
+
 ### old data --------------------------------------------------
 # Run lines 22 through 234 to get cleaned datasets
-dat <- read_csv(paste0(get(my_computer), "CompleteES_May2021.csv"))
-target <- read_csv(paste0(get(my_computer), "TARGETED.csv"))
-ps_scalar <- read_csv(paste0(get(my_computer), "PS_scalar.csv"))                                      # propensity score
-dat <- dat %>%
-        left_join(target,by=c("authyear","record","varname","outcomeID","wave_base1"))        # add 'target'
+# dat <- read_csv(paste0(get(my_computer), "CompleteES_May2021.csv"))
+# target <- read_csv(paste0(get(my_computer), "TARGETED.csv"))
+# ps_scalar <- read_csv(paste0(get(my_computer), "PS_scalar.csv"))                                      # propensity score
+# dat <- dat %>%
+#         left_join(target,by=c("authyear","record","varname","outcomeID","wave_base1"))                # add 'target'
 # write_csv(dat, "~/Desktop/CompleteES_May2021_target.csv")              # to merge w/ new data in MBI_MA_data_rev1.Rmd
-# ### new data --------------------------------------------------
-# dat0 <- read_csv(paste0(get(my_computer), "MBI_master_data.csv"))
-# studies0 <- dat0 %>% distinct(authyear) %>% flatten_chr()
-# dat <- read_csv(paste0(get(my_computer), "new_ES.csv")) %>%
-#   mutate(d = as.numeric(d),
-#          old_ES = if_else(authyear %in% studies0, 1, 0),                                          # add old ES indicators
-#          RCPTHsi = if_else(RCPTHsi < 0, NA_real_, RCPTHsi),
-#          HIAGRtot = if_else(HIAGRtot < 0, NA_real_, HIAGRtot)) %>%
-#   naniar::replace_with_na_all(condition = ~.x %in% c(-999,-9999,-99999,"-999", "-9999"))
-# ps_scalar <- read_csv(paste0(mac2, "PS_scalar_new.csv"))
-# # -------------------------------------------------------------
+### new data --------------------------------------------------
+dat <- read_csv(paste0("../data/mid/3_include/Main",rho,"_include.csv")) %>%
+  mutate(RCPTHsi = if_else(RCPTHsi < 0, NA_real_, RCPTHsi),
+         HIAGRtot = if_else(HIAGRtot < 0, NA_real_, HIAGRtot)) %>%
+  naniar::replace_with_na_all(condition = ~.x %in% c(-999,-9999,-99999,"-999", "-9999"))
+# ps_scalar <- read_csv(paste0(mac2, "PS_scalar_new.csv"))                                             # --- get the PS later
+# -------------------------------------------------------------
 
 # exclude extreme values
 dat <- dat[which(dat$dv >0),]
 dat <- dat[which(abs(dat$d) < 3.3),]
 dat <- dat[which(dat$wt < 10000),]
 
+
+study <- dat %>% distinct(study) %>% flatten_chr()     # 392 studies w/ Main outcomes
 # ## Zone: investigate excluded d values
 # dat$d[!(dat$dv >0)]                 # 91 NAs
 # dat$d[(abs(dat$d) >= 3.3)]
@@ -91,8 +89,8 @@ dat <- dat[which(dat$wt < 10000),]
 
 # create unique 'ID' for <authyear, record> and for <authyear>  
 dat$ID <-cumsum(!duplicated(dat[1:2]))   
-dat <- dat %>%
-        left_join(ps_scalar, by = "ID")                                                       # add new propensity score to the data
+# dat <- dat %>%
+#         left_join(ps_scalar, by = "ID")                                                                         # ---  # add new propensity score to the data  
 dat <- dat[which(dat$dv < 2),]
 dat$studyid <-cumsum(!duplicated(dat[1]))                                                                        
 
@@ -141,6 +139,7 @@ dat$individual <- 0
 dat$individual[dat$GRPINDJ3T == "Individual"] <- 1
 
 # re-express scales/format of behavior number
+dat$NMainrecom <- as.numeric(dat$NMainrecom)
 dat$scale_nm <- scale(dat$NMainrecom, scale=FALSE, center=TRUE)                                    # center 'NMainrecom'
 dat$sqrrec <- (dat$scale_nm)^2                                                                     # create the quadratic term of centered 'NMainrecom'
 # dat$sqrtotrec <- (dat$totalrec)^2                                                                  # create the quadratic term of 'totalrec' (total recom.)    Zone: commented out because no 'totalrec' exists                  
@@ -160,16 +159,21 @@ dat$clinical[dat$behcli == "Clinical"] <- 1
 dat$clinical <- factor(dat$clinical,levels=c(0,1),labels=c("Behavioral","Clinical"))
 
 # exclude non-qualified studies
-dat$exclude <- 0
-# dat$exclude[dat$studyid  == 127] <- 1 #not actually MBX
-dat$exclude[dat$authyear  == "Jemmott, Jemmott, Fong & Morales, 2010 (updated)"] <- 1  #not actually MBX
-# dat$exclude[dat$studyid  == 176] <- 1 #not actually mbx
-dat$exclude[dat$authyear  == "Mai 2018 (Completed)"] <- 1  #not actually mbx
-# dat$exclude[dat$studyid  == 204] <- 1 #no rec
-dat$exclude[dat$authyear  == "Niiranen, 2014"] <- 1  #no rec
-# dat$exclude[dat$studyid  == 315] <- 1
-dat$exclude[dat$authyear  == "Writing group of the PREMIER collaborative research group, 2003 & Lin et al. 2007 COMPLETED"] <- 1
-dat <- dat[which(dat$exclude == 0),]
+# dat$exclude <- 0
+# # # dat$exclude[dat$studyid  == 127] <- 1 #not actually MBX
+# # dat$exclude[dat$authyear  == "Jemmott, Jemmott, Fong & Morales, 2010 (updated)"] <- 1  #not actually MBX
+# # # dat$exclude[dat$studyid  == 176] <- 1 #not actually mbx
+# # dat$exclude[dat$authyear  == "Mai 2018 (Completed)"] <- 1  #not actually mbx
+# # # dat$exclude[dat$studyid  == 204] <- 1 #no rec
+# # dat$exclude[dat$authyear  == "Niiranen, 2014"] <- 1  #no rec
+# # # dat$exclude[dat$studyid  == 315] <- 1
+# # dat$exclude[dat$authyear  == "Writing group of the PREMIER collaborative research group, 2003 & Lin et al. 2007 COMPLETED"] <- 1
+# 
+# dat$exclude[dat$authyear  == "Jemmott, Jemmott, Fong &amp; Morales, 2010 (updated) (fall22check)"] <- 1 #not actually MBX                            # --- updated Feb, 2023 (these were removed already in MBI_MA_data_rev1.Rmd)
+# dat$exclude[dat$authyear  == "Mai 2018 (Completed) (fall22-check)"] <- 1 #not actually mbx 
+# dat$exclude[dat$authyear  == "Niiranen, 2014 (fall22check - new codes)"] <- 1 #no rec 
+# dat$exclude[dat$authyear  == "Writing group of the PREMIER collaborative research group, 2003 &amp; Lin et al. 2007 COMPLETED (fall22check)"] <- 1 
+# dat <- dat[which(dat$exclude == 0),]
 
 # create factor of the nature of intervention communication
 dat$motivation <- 0
@@ -189,10 +193,10 @@ dat$scmss[is.na(dat$scmss)] <- 0
 dat$scmss[is.na(dat$scmss == ".")] <- NA
 
 # create 'numberofrows': observation # in each group sample
-g <- tally(group_by(dat,ID))                                                                    
-g <- g %>% rename(numberofrows = n)
-dat <-left_join(dat, g, by = "ID")
-rm(g)
+gg <- tally(group_by(dat,ID))                                                                    # --- replace 'g' by 'gg' to avoid replace new stat 'g' - Feb, 2023  
+gg <- gg %>% rename(numberofrows = n)
+dat <-left_join(dat, gg, by = "ID")
+rm(gg)
 
 dat <- dat[which(!is.na(dat$wave_base1)), ]                                                      # remove observations without baseline 
 
@@ -211,8 +215,8 @@ dat <- dat %>%
 ## Get Aux Outcomes, remove extreme values              
 
 ### --- ES + AUX data --- 
-aux <- read.csv(paste0(get(my_computer), "CompleteES+Aux_May2021.csv"))                       # data of 1st submission
-# aux <- read.csv(paste0(get(my_computer), "new_ES+Aux.csv"))                                    # data of 1st revision
+# aux <- read.csv(paste0(get(my_computer), "CompleteES+Aux_May2021.csv"))                       # data of 1st submission
+aux <- read.csv(paste0("../data/mid/3_include/MainAux05_include.csv"))                          # data of 1st revision
 ### ---
 
 aux <- aux[which(aux$dv >0),]
@@ -379,22 +383,22 @@ dat_fp2 <- dat_fp2 %>%
         mutate(W = 2/sqrt(N), W_sqrt = sqrt(W))
 
 
-# correct identified errors and save out a copy to avoid repeating this script section for some purposes
-dat2$domain[which(dat2$authyear == "Ingersoll et al., 2013")] <- "DA"      # CORRECTION (database updated)
-dat2$domain[which(dat2$authyear == "Lv, 2013")] <- "LS"
-dat2$domain[which(dat2$authyear == "Savoye et al., 2007 COMPLETED")] <- "LS"
-dat2$domain[which(dat2$authyear == "Wilhelmsen et al., 1986")] <- "LS"
-dat2$domain[which(dat2$authyear == "Wister et al., 2007")] <- "LS"
+# # correct identified errors and save out a copy to avoid repeating this script section for some purposes
+# dat2$domain[which(dat2$authyear == "Ingersoll et al., 2013")] <- "DA"      # CORRECTION (database updated)         #--- no longer needed (all are corrected)
+# dat2$domain[which(dat2$authyear == "Lv, 2013/MD (fall22check)")] <- "LS"
+# dat2$domain[which(dat2$authyear == "Savoye et al., 2007 COMPLETED (fall22check - new codes)")] <- "LS"
+# dat2$domain[which(dat2$authyear == "Wilhelmsen et al., 1986 (fall22check)")] <- "LS"
+# dat2$domain[which(dat2$authyear == "Wister et al., 2007 (fall22check - new codes)")] <- "LS"
 
-# publication year Med, M, SD
-dat2$pubyear[which(dat2$pubyear == 201000000000)] <- 2008                  # CORRECTION (database updated)
-dat2$pubyear[which(dat2$pubyear == 20178)] <- 2017
+# # publication year Med, M, SD
+# dat2$pubyear[which(dat2$pubyear == 201000000000)] <- 2008                  # CORRECTION (database updated)         #--- no longer needed (all are corrected)
+# dat2$pubyear[which(dat2$pubyear == 20178)] <- 2017
 
 dat2 <- dat2 %>%
         mutate(scale_nm = as.vector(scale_nm),
                sqrrec = as.vector(sqrrec))
 # write_csv(dat2, "~/Box Sync/Zone/7_MBI_Database/MBX Stuff to Share/dat2.csv")     # data for propensity-score model in 1st submission
-# write_csv(dat2, "~/Box Sync/Zone/7_MBI_Database/MBX Stuff to Share/dat2_rev1.csv")     # data for propensity-score model in 1st revision
+write.csv(dat2, paste0("../data/mid/4_psScore/dat2_rev1.csv"))                                                       #--- data for propensity-score model in 1st revision (rho NOT needed)
 
 # save for the MBI revision
 # dat %>% dplyr::select(-c(scale_nm, sqrrec)) %>% write_csv("~/Desktop/MBI_master_data.csv")       # 1st submission
@@ -402,8 +406,6 @@ dat2 <- dat2 %>%
 
 # save.image(file = paste0(get(my_desktop), "MBI_workspace.RData"))        # 1st revision w/o propensity score
 # save.image(file = paste0(get(my_desktop), "MBI_workspace_ps.RData"))     # 1st revision w/ propensity score
-
-
 ```
 
 
@@ -1221,6 +1223,8 @@ test_merge_dr_CHE <- coef_test(merge_dr_CHE, vcov = "CR2")
 merge_ex_CHE; merge_die_CHE; merge_tobb_CHE; merge_sex_CHE; merge_au_CHE; merge_dr_CHE
 test_merge_sex_CHE; test_merge_au_CHE; test_merge_dr_CHE; test_merge_ex_CHE; test_merge_die_CHE; test_merge_tobb_CHE
 ```
+
+
 
 
 ## MEDIATION ANALYSIS - aggregate to sample NEW

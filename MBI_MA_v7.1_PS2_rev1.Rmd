@@ -38,15 +38,19 @@ library(lavaan)
 library(VIM)
 set.seed(55555)
 
-win <- "C:/Users/sliu/Box/"
-mac <- "~/Box Sync/"
-mac2 <- "~/Box Sync/Zone/7_MBI_Database/PS_Model/"
-win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
-mac_desktop <- "~/Desktop/"
+# win <- "C:/Users/sliu/Box/"
+# mac <- "~/Box Sync/"
+# mac2 <- "~/Box Sync/Zone/7_MBI_Database/PS_Model/"
+# win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
+# mac_desktop <- "~/Desktop/"
 
 # reduce name list length
-rm_var <- c("varname", "outcomeID", "prob_mean", "wave_base1", "behcli", "g", "INC", "PRPOS", "GR1", "GR2", "GR3", "type", 
-            "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "flag_change", "m", "c", "multiple", "d", "dv", "wt", "grpname", "inflbhvr",
+rm_var <- c(
+            
+            "hiv_recnum", "drug_recnum", # "changeout", "changesd", "changeaux",                                               #--- new var added in 'fall22check' round
+            "varname", "outcomeID", "prob_mean", "wave_base1", "behcli", "g", "INC", "PRPOS", "GR1", "GR2", "GR3", # "type", 
+            # "w1", "w2", "w3", "w4", "w5", "w6","w7", "w8", "flag_change", 
+            "m", "c", "multiple", "d", "dv", "wt", "grpname", "inflbhvr",
             "T1", "T2", "T3", "T4", "T5", "recommend", "AUXrecomend", 
             "epeep", "baseline", "intervention",
             "st2", "st3", "st4", "st5",
@@ -166,7 +170,7 @@ rm_var <- c("varname", "outcomeID", "prob_mean", "wave_base1", "behcli", "g", "I
             "numberofrows", "d_distress", "d_motiv", "d_info", "d_skill", "elaborative_d", "info_wellbeing")
 
 # df <- read_csv(paste0(win, "Zone/7_MBI_Database/MBX Stuff to Share/dat2.csv"))           # 1st submission
-df <- read_csv(paste0(mac, "Zone/7_MBI_Database/MBX Stuff to Share/dat2_rev1.csv"))      # 1st revision
+df <- read_csv(paste0("../data/mid/4_psScore/dat2_rev1.csv"))                            # 1st revision
 
 dat <- df %>% 
   dplyr::select(-rm_var) 
@@ -366,9 +370,9 @@ ps_var1 <- c(
 # "context1",                           # describe the study in a few sentences (repeating a quesiton above)    !!! redundant
 # "INC.y",                              # should include the study if there are any effect sizes                !!! redundant
 # "SUBS",                               # subsample             !!! open
-"GR1.y",                              # the study can be included in group 1 (lifestyle)
-"GR2.y",                              # the study can be included in group 2 (HIV)
-"GR3.y"                              # the study can be included in group 3 (alcohol/drug)
+"GR1",                              # the study can be included in group 1 (lifestyle)
+"GR2",                              # the study can be included in group 2 (HIV)
+"GR3"                              # the study can be included in group 3 (alcohol/drug)
 # "PRPOS.y"                            # pre and post measures are available
  
 # Dynamic Variables
@@ -382,15 +386,15 @@ In this step, I modified the data to the level of trial arms (669->866 trial arm
 # data for 2nd round based on missing value %
 df2 <- df %>%
   dplyr::select(ps_var1) %>% 
-  rename(GR1 = GR1.y, GR2 = GR2.y, GR3 = GR3.y) %>%
+  # rename(GR1 = GR1.y, GR2 = GR2.y, GR3 = GR3.y) %>%
   distinct(ID, .keep_all = T)
 
 missing_perc <- 0.07                                                              # 0.05 in 1st submission
 qualify_var2 <- sapply(df2, function(i){sum(is.na(i))/length(i) < missing_perc})     
-ps_var2 <- names(df2)[qualify_var2]                                               # recptmsi -> RCPTFsi
+ps_var2 <- names(df2)[qualify_var2]                                               # recptmsi (0.1163842) -> RCPTFsi (0.1016949)
 
 # show missing proportions
-sapply(df2, function(i){sum(is.na(i))/length(i)})["pubyear"]
+sapply(df2, function(i){sum(is.na(i))/length(i)})
 sort(ps_var2)
 ```
 

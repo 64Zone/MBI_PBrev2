@@ -44,8 +44,8 @@ win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
 mac <- "~/Box Sync/"
 
 #Run lines 22 through 234 to get cleaned datasets
-dat <- read.csv(paste0(win, "Zone/7_MBI_Database/MBX Stuff to Share/CompleteES_May2021.csv"))
-target <- read.csv(paste0(win, "Zone/7_MBI_Database/MBX Stuff to Share/TARGETED.csv"))
+dat <- read.csv(paste0(mac, "Zone/7_MBI_Database/MBX Stuff to Share/CompleteES_May2021.csv"))
+target <- read.csv(paste0(mac, "Zone/7_MBI_Database/MBX Stuff to Share/TARGETED.csv"))
 # ps_scalar <- read_csv(paste0(mac, "Zone/PS_scalar.csv"))                                      # propensity score
 dat <- dat %>%
         left_join(target,by=c("authyear","record","varname","outcomeID","wave_base1"))        # add 'target'
@@ -128,10 +128,10 @@ dat$clinical <- factor(dat$clinical,levels=c(0,1),labels=c("Behavioral","Clinica
 
 # exclude non-qualified studies
 dat$exclude <- 0
-dat$exclude[dat$studyid  == 127] <- 1 #not actually MBX
-dat$exclude[dat$studyid  == 176] <- 1 #not actually mbx
-dat$exclude[dat$studyid  == 204] <- 1 #no rec
-dat$exclude[dat$studyid  == 315] <- 1
+dat$exclude[dat$authyear  == 127] <- 1 #not actually MBX ("Jemmott, Jemmott, Fong & Morales, 2010 (updated)") -
+dat$exclude[dat$studyid  == 176] <- 1 #not actually mbx ("Mai 2018 (Completed)") - Mai 2018 (Completed) (fall22-check)
+dat$exclude[dat$studyid  == 204] <- 1 #no rec ("Niiranen, 2014") - Niiranen, 2014 (fall22check - new codes)
+dat$exclude[dat$studyid  == 315] <- 1 # ("Writing group of the PREMIER collaborative research group, 2003 & Lin et al. 2007 COMPLETED")
 dat <- dat[which(dat$exclude == 0),]
 
 # create factor of the nature of intervention communication
@@ -152,7 +152,7 @@ dat$scmss[is.na(dat$scmss)] <- 0
 dat$scmss[is.na(dat$scmss == ".")] <- NA
 
 # create 'numberofrows': observation # in each group sample
-g <- tally(group_by(dat,ID))                                                                    
+g <- tally(group_by(dat,ID))                                                                                                     
 g <- g %>% rename(numberofrows = n)
 dat <-left_join(dat, g, by = "ID")
 rm(g)

@@ -39,37 +39,418 @@ library(hrbrthemes)
 library(patchwork)    
 library(rstatix)
 set.seed(55555)
-
-
-my_computer <- 
-  # "win"
-  "mac"
-
-if(my_computer == "mac"){
-  new_data_path <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"
-  data_investigate_path <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/data_pipeline/Investigate_ES+AUX/"
-  my_computer2 <- "mac2"
-} else {
-  new_data_path <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/"
-  data_investigate_path <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Revision_Files_new_data/data_pipeline/Investigate_ES+AUX/"
-  my_computer2 <- "win2"
-}
-
-
-win <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_submission/"
-mac <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_submission/"
-win2 <- "C:/Users/sliu/Box/MBI Manuscripts/Revision/R_files/Data_master/"
-mac2 <- "~/Box Sync/Zone/7_MBI_Database/MBI Manuscripts/Revision/R_files/Data_master/"
-
-win_desktop <- "C:/Users/sliu/OneDrive - PennO365/Desktop/"
-mac_desktop <- "~/Desktop/"
-my_desktop <- get(paste0(my_computer, "_desktop"))
-
 select <- dplyr::select
 ```
 
 
-```{r data_merge}
+```{r update_var_multi_entry_study}
+######################################################################################################################################################
+## This section handles the skipped questions in header/sheet1 and static/sheet2 part for multi-entry studies in the MBI database
+#  - Two sets of loops: one for Main, the other for MainAux 
+######################################################################################################################################################
+
+### data parameters ---
+rho <-          # prepost corr.
+  "05"
+  # "04"
+  # "06"
+
+### read ---
+df <- read_csv(paste0("../data/mid/1_merge/Main_rho",rho,"_df_measurementES-20230205-132326.csv")) %>%                # Main
+  rename(record = record.x) %>% 
+  select(-record.y) %>% 
+  relocate(c(behcli, sd, target), .after = studyyearend)    # aligning var order w/ df2 for convenience of updating var from multi-entry studies below (not actually used but helps check var names)
+df2 <- read_csv(paste0("../data/mid/1_merge/MainAux_rho",rho,"_df_measurementES-20230205-135537.csv")) %>%            # Main + Aux
+  rename(record = record.x) %>% 
+  select(-record.y)
+
+## filling in some missing values so it is easier later (see ../table/1_include/study_inclusion_criteria_summary.docx)
+df[which(df$authyear=="Burke et al. 2020 MD (fall22check)"), c("hiv_recnum")] <- 1
+df2[which(df2$authyear=="Burke et al. 2020 MD (fall22check)"), c("hiv_recnum")] <- 1
+
+df[which(df$authyear=="Firestone 2016/MD (fall22check)"), c("hiv_recnum")] <- 1
+df2[which(df2$authyear=="Firestone 2016/MD (fall22check)"), c("hiv_recnum")] <- 1
+
+# ## check var name alignment
+# setdiff(names(df), names(df2))
+# sum(names(df) == names(df2))
+
+# ## supervise labels for combining and filtering ---
+# df %>% distinct(authyear, .keep_all = T) %>% write.csv(., "../data/vet/authyear.csv")      # see 1_authyear_vetted.xlsx & project notes (Sun Feb  5 06:44:22 EST 2023)
+# study <- df %>% distinct(authyear) %>% flatten_chr(); study2 <- df2 %>% distinct(authyear) %>% flatten_chr()  # 544 vs. 557 (checked!)
+# setdiff(study2, study)
+
+# ## computer check and multi-entry study summary (including those not in 'fall22check' as well)
+# df %>% 
+#   distinct(authyear, .keep_all = T) %>% 
+#   filter(str_detect(authyear, "/"))                                                     # studies w/ multiple entries (missed Cade10 that has no "/")
+
+Anderson21 <- c("Anderson et al. (2021) (Zone for Dolores Wk28) (part 1/2) (fall22check)",
+              "Anderson et al. (2021) (Zone for Dolores Wk28) (part 2/2) (fall22check - new codes)")
+Anderson20 <- c("Andersson, 2020 - 1/2 (Sally Week 25) (fall22-check)",
+                "Andersson, 2020 - 2/2 (Sally week 25)(fall22-check)")
+Arad15 <- c("Arad, 2015 part 1/2 (fall22check -- new codes)",
+            "Arad, 2015 part 2/2 (fall22check -- new codes)")
+Burke05 <- c("Burke et al., 2005; 2007;2008 COMPLETED part 1/2 (fall22check - new codes)",
+             "Burke et al., 2005; 2007;2008 COMPLETED part 2/2 (fall22check - new codes)")
+Cade10 <- c("Cade et al., 2010 (rev.) (part 1)(fall22check)",                                 # special one without "/" in label
+            "Cade et al., 2010 (rev.) (part 2) (fall22check)")
+Elkind20 <- c("Elkind-Hirsch et al., 2020 (Angela week 29; 1/2)",
+              "Elkind-Hirsch et al., 2020 (Angela week 29; 2/2)")
+Griffin14 <- c("Griffin et al., 2014 (new) (fall22check - new codes 1/2)",
+               "Griffin et al., 2014 (new) (fall22check - new codes 2/2)")
+Grilo20 <- c("Grilo et al., 2020 (Angela week 29; part 1/2)",
+             "Grilo et al., 2020 (Angela week 29; part 2/2)")
+Heufelder09 <- c("Heufelder et al., 2009 (Sally week 29) (part 1/2) (fall22check - new codes)",
+                 "Heufelder et al., 2009 (Sally week 29) (part 2/2) (fall22check - new codes)")
+Jacot20 <- c("Jacot et al., 2020 (Melody, Week 27) (part 1/4) (fall22check)",
+             "Jacot et al., 2020 (Melody, Week 27) (part 2/4) (fall22check - new codes)",
+             "Jacot et al., 2020 (Melody, Week 27) (part 3/4) (fall22check - new codes)",
+             "Jacot et al., 2020 (Melody, Week 27) (part 4/4) (fall22check - new codes)")
+Jolly18 <- c("Jolly, 2018 (Completed) (fall22check) part 1/3", 
+             "Jolly, 2018 (Completed) (fall22check - new codes) part 2/3",
+             "Jolly 2018 (Completed) (fall22check - new codes) part3/3")
+Manios08 <- c("Manios et al., 2008 COMPLETED part 1/2 (fall22check - new codes)",
+              "Manios et al., 2008 COMPLETED part 2/2 (fall22check - new codes)")
+Melanson04 <- c("Melanson, 2004 (completed) (fall22check - new codes) part 1/3",
+                "Melanson, 2004 (fall22check - new codes) part 2/3",
+                "Melanson, 2004 (fall22check - new codes) part 3/3")                        # --- check MainAux file (done!) Include this will hand MainAux data too
+Nilsson01 <- c("Nilsson, 2001 COMPLETED (part 1/2) (fall22check - new codes)",
+               "Nilsson, 2001 COMPLETED (part 2/2) (fall22check - new codes)")
+Palavras21 <- c("Palavras et al., 2021 (Angela week 28; part 1/2)",
+                "Palavras et al., 2021 (Angela week 28; part 2/2)")
+Peragallo12 <- c("Peragallo, Gonzalez-Guarda, McCabe &amp; Cianelli, 2012 (updated) (part 1/2) (fall22check)",
+               "Peragallo, Gonzalez-Guarda, McCabe &amp; Cianelli, 2012 (updated) (part 2/2) (fall22check - new codes)")
+Rongkavilit13 <- c("Rongkavilit et al., 2013 (updated) (part 1/2) (fall22check)",
+                 "Rongkavilit et al., 2013 (updated) (part 2/2) (fall22check - new codes)")
+Stasinaki21 <- c("Stasinaki et al., 2021 (Angela week 30; part 1/2)",
+                 "Stasinaki et al., 2021 (Angela week 30; part 2/2)")
+Toobert00 <- c("Toobert et al. 2000 COMPLETED (fall22check - new codes) part 1/2",
+               "Toobert et al. 2000 COMPLETED (fall22check - new codes) part 2/2")
+Watkins03 <- c("Watkins et al., 2003 COMPLETED part 1/2 (fall22check -- new codes)",
+               "Watkins et al., 2003 COMPLETED part 2/2 (fall22check -- new codes)")
+WERNER13 <- c("WERNER ET AL. 2013 NEW COMPLETED (fall22check - new codes 1/2)",
+              "WERNER ET AL. 2013 NEW COMPLETED (fall22check - new codes 2/2)")
+Williams18 <- c("Williams, 2018 (Completed) (fall22check - new codes) part1/3",
+                "Williams, 2018 (Completed) (fall22check - new codes) part2/3",
+                "Williams 2018 (Completed) (fall22check - new codes) part3/3")
+
+### update sheet1 and sheet2 var info in non-1st entry of multi-entry studies above -------------------------------------------------------------------
+## get sheet1 and sheet2 variables
+sheet1 <- read_csv("../data/raw/MetaAnalysis_report_2023-01-27_sheet1.csv") %>% 
+  rename(authyear = `authyear...1`) %>% 
+  select(-`authyear...20`)
+sheet2 <- read_csv("../data/raw/MetaAnalysis_report_2023-01-27_sheet2.csv") %>% 
+  rename(authyear = `authyear...1`, record = `record...2`) %>% 
+  select(-c(`authyear...105`, `record...148`))
+var_sheet1 <- names(sheet1)[!grepl("authyear|record", names(sheet1))];
+var_sheet2 <- names(sheet2)[!grepl("authyear|record", names(sheet2))]
+
+## update sheet1 variables (both Main and MainAux datasets) ---
+study_list <- list(Anderson21, Anderson20, Arad15, Burke05, Cade10, Elkind20, Griffin14, Grilo20, Heufelder09, Jacot20, Jolly18, Manios08,          # for dealing w/ sheet1 (header): study-specific 
+                   Melanson04, Nilsson01, Palavras21, Peragallo12, Rongkavilit13, Stasinaki21, Toobert00, Watkins03, WERNER13, Williams18)
+
+for(i in 1:length(study_list)) {                                                                                                                    # update Main data
+  study_entries <- study_list[[i]]
+  df[which(df$authyear %in% study_entries[-1]), var_sheet1] <- df[which(df$authyear == study_entries[1])[1], var_sheet1]
+}
+for(i in 1:length(study_list)) {                                                                                                                    # update MainAux data
+  study_entries <- study_list[[i]]
+  df2[which(df2$authyear %in% study_entries[-1]), var_sheet1] <- df2[which(df2$authyear == study_entries[1])[1], var_sheet1]
+}
+
+
+## update sheet2 variables (Main) ---
+before <- lapply(df, function(x){sum(is.na(x))/length(x)})                # log missing% before updating for later checking
+study_list_flat <- flatten_chr(study_list)                                                                                                          # for dealing w/ sheet2 (static): group-specific
+first_study_entry <- study_list_flat[grepl("1/", study_list_flat)]        # all 1st entries that provide info
+all_study_record <- df %>% distinct(authyear, record)
+
+for (i in 1:length(study_list)){
+  all_records <- df %>% 
+    filter(authyear %in% study_list[[i]]) %>%                             # all existing groups in a given study
+    distinct(record) %>% 
+    flatten_chr()
+  non_first_study_entry <- study_list[[i]][-1]                            # entries needing info in a given study
+  
+  for (j in 1:length(non_first_study_entry)) {
+    for (k in 1:length(all_records)) {
+  
+      if(length(which(                                                    # verify existence of (authyear, record) combination
+                      all_study_record$authyear == non_first_study_entry[j] &
+                      all_study_record$record == all_records[k])) == 0) {
+        
+        next
+        
+      } else {
+        df[which(
+                df$authyear == non_first_study_entry[j] & 
+                  df$record == all_records[k]), var_sheet2] <- 
+                                    df[which(df$authyear == first_study_entry[i] & 
+                                      df$record == all_records[k]), var_sheet2][1, ]   # just get one row as updating template
+      }
+      
+    }  # record loop
+  }  # entry loop
+}  # study loop
+
+# ## check updating
+# after <- lapply(df, function(x){sum(is.na(x))/length(x)})                # missing% after updating
+# flatten_dbl(before) - flatten_dbl(after); names(df)                      # missing% - var name makes sense
+
+
+
+### update sheet2 variables (MainAux) ---
+before2 <- lapply(df2, function(x){sum(is.na(x))/length(x)})
+all_study_record2 <- df2 %>% distinct(authyear, record)
+
+for (i in 1:length(study_list)){
+  all_records <- df2 %>%                                                                #--- (changes)
+    filter(authyear %in% study_list[[i]]) %>%                             
+    distinct(record) %>% 
+    flatten_chr()
+  non_first_study_entry <- study_list[[i]][-1]                            
+  
+  for (j in 1:length(non_first_study_entry)) {
+    for (k in 1:length(all_records)) {
+  
+      if(length(which(                                                    
+                      all_study_record2$authyear == non_first_study_entry[j] &          #---
+                      all_study_record2$record == all_records[k])) == 0) {              #---
+        
+        next
+        
+      } else {
+        df2[which(                                                                      #--- 
+                df2$authyear == non_first_study_entry[j] &                              #---
+                  df2$record == all_records[k]), var_sheet2] <-                         #---  
+                                    df2[which(df2$authyear == first_study_entry[i] &    #---
+                                      df2$record == all_records[k]), var_sheet2][1, ]   #---
+      }
+      
+    }  
+  }  
+}  
+
+# ## check updating
+# after2 <- lapply(df2, function(x){sum(is.na(x))/length(x)})                # missing% after updating
+# flatten_dbl(before2) - flatten_dbl(after2); names(df2)                      # missing% - var name makes sense
+
+write_csv(df, paste0("../data/mid/2_update/Main",rho,".csv"))
+write_csv(df2, paste0("../data/mid/2_update/MainAux",rho,".csv"))
+```
+
+
+```{r authyear_combine_filter_inclusion}
+######################################################################################################################################################
+## This section creates the level-3 index 'study' after combining entries from the same study together
+#  - fun_create_study works for both Main and MainAux datasets 
+######################################################################################################################################################
+
+dat <- read_csv(paste0("../data/mid/2_update/Main",rho,".csv"))     # ; df <- dat              # copy for comparison 
+dat2 <- read_csv(paste0("../data/mid/2_update/MainAux",rho,".csv")) # ; df2 <- dat2
+
+### Step 1: combine multiple entries into the same study -----------------------------------------------------------
+## labels for 'study' variable
+study_list_name <- as.character(expression(Anderson21, Anderson20, Arad15, Burke05, Cade10, Elkind20, Griffin14, Grilo20, Heufelder09, Jacot20, 
+                                           Jolly18, Manios08, Melanson04,Nilsson01, Palavras21, Peragallo12, Rongkavilit13, Stasinaki21, 
+                                           Toobert00, Watkins03, WERNER13, Williams18))
+
+fun_create_study <- function(dataset){                         # need study_list from above section !!!
+  dataset <- dataset %>% 
+    mutate(study = case_when(
+     authyear %in% study_list[[1]] ~ study_list_name[1],       # use 'authyear' for filtering studies because 'study' do not have info like 'fall22check'
+     authyear %in% study_list[[2]] ~ study_list_name[2],
+     authyear %in% study_list[[3]] ~ study_list_name[3],
+     authyear %in% study_list[[4]] ~ study_list_name[4],
+     authyear %in% study_list[[5]] ~ study_list_name[5],
+     authyear %in% study_list[[6]] ~ study_list_name[6],
+     authyear %in% study_list[[7]] ~ study_list_name[7],
+     authyear %in% study_list[[8]] ~ study_list_name[8],
+     authyear %in% study_list[[9]] ~ study_list_name[9],
+     authyear %in% study_list[[10]] ~ study_list_name[10],
+     authyear %in% study_list[[11]] ~ study_list_name[11],
+     authyear %in% study_list[[12]] ~ study_list_name[12],
+     authyear %in% study_list[[13]] ~ study_list_name[13],
+     authyear %in% study_list[[14]] ~ study_list_name[14],
+     authyear %in% study_list[[15]] ~ study_list_name[15],
+     authyear %in% study_list[[16]] ~ study_list_name[16],
+     authyear %in% study_list[[17]] ~ study_list_name[17],
+     authyear %in% study_list[[18]] ~ study_list_name[18],
+     authyear %in% study_list[[19]] ~ study_list_name[19],
+     authyear %in% study_list[[20]] ~ study_list_name[20],
+     authyear %in% study_list[[21]] ~ study_list_name[21],
+     authyear %in% study_list[[22]] ~ study_list_name[22],
+     T ~ authyear
+    ))
+  return(dataset)
+}
+df <- fun_create_study(df)
+df2 <- fun_create_study(df2)
+
+### Step 2: filter studies and establish inclusion criteria -------------------------------------------------------------
+# ## check the whole list of study for including non-fall22check ones coded from Summer2022
+# ## export short list for checking
+# df2 %>% 
+#   filter(!str_detect(authyear, "fall22check") & 
+#            !str_detect(authyear, "fall22-check") & 
+#            !str_detect(authyear, "FALL22CHECK")) %>% 
+#   filter(!str_detect(authyear, "test") & 
+#            !str_detect(authyear, "Test")) %>% 
+#   filter(!str_detect(authyear, "EXCLUDE") & 
+#            !str_detect(authyear, "Test")) %>% 
+#   filter(!str_detect(authyear, "Anand") & 
+#            !str_detect(authyear, "Chermack") & 
+#            !str_detect(authyear, "Darbes") & 
+#            !str_detect(authyear, "Marsiglia et al") &
+#            !str_detect(authyear, "Miller") &
+#            !str_detect(authyear, "Shaul") &
+#            !str_detect(authyear, "Valente et al") & !str_detect(authyear, "Valente et. al.") &
+#            !str_detect(authyear, "Wechsberg") &
+#            !str_detect(authyear, "Wilson")) %>%   
+#   distinct(authyear, .keep_all = T) %>% 
+#   relocate(hiv_recnum, drug_recnum, GR1, GR2, GR3, domains, .after = authyear) %>% 
+#   write_csv("../data/vet/non_fall22check.csv")
+
+## read in vetted file
+Zone_vet <- readxl::read_xlsx("../data/vet/2_non_fall22check_vetted.xlsx", sheet = 1) %>% 
+  select(authyear, to_include, hiv_recnum_vet, drug_recnum_vet)
+
+## included studies Zone vetted
+Zone_include <- Zone_vet %>% 
+  filter(to_include == 1) %>% 
+  select(authyear) %>% 
+  flatten_chr()
+
+## Ben's exclusion list
+Ben_exclude <- c("Jemmott, Jemmott, Fong &amp; Morales, 2010 (updated) (fall22check)",     # Ben: not actually MBX
+                 "Mai 2018 (Completed) (fall22-check)",                                    # Ben: not actually MBX
+                 "Niiranen, 2014 (fall22check - new codes)",                               # Ben: no rec
+                 "Writing group of the PREMIER collaborative research group, 2003 &amp; Lin et al. 2007 COMPLETED (fall22check)")
+
+fun_filter_study <- function(dataset){
+  dataset <- dataset %>% 
+    filter(str_detect(authyear, "fall22check") | 
+             str_detect(authyear, "fall22-check") | 
+             str_detect(authyear, "FALL22CHECK") |
+             authyear %in% Zone_include) %>% 
+    filter(!str_detect(authyear, "exclu") & !str_detect(authyear, "EXCLUDE$")) %>%        # one study (Slade et al. 2020) ends w/ 'EXCLUDE?' and it looks fine 
+    filter(!authyear %in% Ben_exclude)                                                    # remove those Ben excluded
+  return(dataset)
+}
+
+fun_update_recnum <- function(d) {
+  d <- d %>% 
+    left_join(Zone_vet, by = "authyear") %>% 
+    mutate(
+      hiv_recnum = case_when(
+        to_include == 1 ~ as.numeric(hiv_recnum_vet),
+        T ~ hiv_recnum),
+      drug_recnum = case_when(
+        to_include == 1 ~ as.numeric(drug_recnum_vet),
+        T ~ drug_recnum)) %>% 
+    select(-c(to_include, hiv_recnum_vet, drug_recnum_vet))
+  return(d)
+}
+
+df <- df %>%  fun_filter_study() %>% fun_update_recnum()
+df2 <- df2 %>%  fun_filter_study() %>% fun_update_recnum()
+
+### Step 3: inclusion criterion -----------------------------------------------------------------------------------------
+fun_include_study <- function(dataset){
+  dataset <- dataset %>% 
+    # distinct(study, .keep_all = T) %>%
+    filter((GR2 == 1 & hiv_recnum == 1) | (GR3 == 1 & drug_recnum == 1) | GR1 == 1)         # this criteria may work, even for HIV & AU/DU studies
+  return(dataset)
+}
+
+df <- fun_include_study(df)
+df2 <- fun_include_study(df2) 
+
+# ## check number of studies
+# data2have <- dat2 %>% distinct(authyear)
+# data2proc <- df2 %>% distinct(study)
+# write_csv(data2have, "../data/mid/3_include/study_EScal.csv")       # 557 studies
+# write_csv(data2proc, "../data/mid/3_include/study_include.csv")     # 401 studies
+
+# ## save data
+# write_csv(df, paste0("../data/mid/3_include/Main",rho,"_include.csv"))
+# write_csv(df2, paste0("../data/mid/3_include/MainAux",rho,"_include.csv"))
+```
+
+
+```{r BKUP}
+# ## criteria variables
+# var: intyn, TWGR, RPRTBHVR, FLUP, designj, hiv_recnum, drug_recnum (INC)
+
+## var description
+# fun_table <- function(x){
+#   x %>% tabyl() %>% adorn_totals()                                                          # traditional way seems safest
+# }
+# sink("../table/1_include/study_inclusion_criteria.txt")
+# criteria <- df2 %>% 
+#   distinct(study, .keep_all = T) %>% 
+#   select(study, intyn, TWGR, RPRTBHVR, FLUP, designj, hiv_recnum, drug_recnum, GR1, GR2, GR3) %>% 
+#   mutate(across(is.numeric, ~ case_when(
+#     .x == -999 ~ NA_real_,
+#     .x == -9999 ~ NA_real_,
+#     T ~ .x))) 
+# criteria %>% select(-study) %>% map(fun_table)
+# criteria %>% tabyl(GR1, GR2) 
+# criteria %>% tabyl(GR2, GR3)
+# criteria %>% tabyl(GR1, GR3) 
+# criteria %>% tabyl(GR1, GR2, GR3) 
+# criteria %>% tabyl(hiv_recnum, drug_recnum) 
+# 
+# criteria %>% tabyl(GR2, hiv_recnum)
+# criteria %>% tabyl(GR3, drug_recnum) 
+# 
+# df2 %>% 
+#   distinct(study, .keep_all = T) %>% 
+#   select(GR2, hiv_recnum) %>% 
+#   mutate(across(everything(), ~ case_when(
+#     is.na(.x) ~ "missing",
+#     .x == -999 ~ "missing",
+#     .x == -9999 ~ "missing",
+#     T ~ "observed"
+#   ))) %>%
+#   tabyl(GR2, hiv_recnum)
+# 
+# df2 %>% 
+#   distinct(study, .keep_all = T) %>% 
+#   select(GR2, hiv_recnum) %>% 
+#   mutate(across(everything(), ~ case_when(
+#     is.na(.x) ~ "missing",
+#     .x == -999 ~ "missing",
+#     .x == -9999 ~ "missing",
+#     T ~ as.character(.x)
+#   ))) %>%
+#   tabyl(GR2, hiv_recnum)
+# df2 %>% 
+#   distinct(study, .keep_all = T) %>% 
+#   select(GR3, drug_recnum) %>% 
+#   mutate(across(everything(), ~ case_when(
+#     is.na(.x) ~ "missing",
+#     .x == -999 ~ "missing",
+#     .x == -9999 ~ "missing",
+#     T ~ "observed"
+#   ))) %>%
+#   tabyl(GR3, drug_recnum)
+# df2 %>% 
+#   distinct(study, .keep_all = T) %>% 
+#   select(GR3, drug_recnum) %>% 
+#   mutate(across(everything(), ~ case_when(
+#     is.na(.x) ~ "missing",
+#     .x == -999 ~ "missing",
+#     .x == -9999 ~ "missing",
+#     T ~ as.character(.x)
+#   ))) %>%
+#   tabyl(GR3, drug_recnum)
+# sink()
+```
+
+
+```{r _____OLD_____data_merge}
 ## list all datasets and correspondance
 df <- read_csv(paste0(get(my_computer), "MBI_master_data.csv"))          # data in 1st submission 
 df_new <- read_csv(paste0(new_data_path, "data_Aug2022.csv")) %>%        # Aug 2022 data (ES + FUN_ES)
@@ -197,7 +578,7 @@ new_df3 <- df3_add %>%
 ```
 
 
-```{r investigate datasets}
+```{r _____OLD_____investigate datasets}
 ### investigate dataset differences about ES number -------------------------------------------------
 ## Conclusion: Ben's ES+Aux data seemed based on applying FUN_ES2 to Main+Aux data.
 ##             my ES+Aux data were processed in "new_data_after_database_update}" in JCCP_v4_data.Rmd
@@ -229,7 +610,7 @@ rbind(var_new, var4) %>% openxlsx::write.xlsx("~/Desktop/var_check_category.csv"
 ```
 
 
-```{r MBI_data_checking}
+```{r _____OLD_____MBI_data_checking}
 ## generate study list for MBI data checking among all the coders (10 individuals)
 df5 <- read.csv(paste0(my_desktop, "new_ES+Aux.csv"))
 
@@ -311,7 +692,7 @@ df5 %>% distinct(authyear, authyear.1, .keep_all = T) %>% select(c(authyear, aut
 ```
 
 
-```{r p_value_and_label_issue_in_outcome_coding}
+```{r _____OLD_____p_value_and_label_issue_in_outcome_coding}
 df <- read_csv("~/Desktop/Sheet3_bind_MainAux.csv")
 dat <- read.csv("~/Desktop/new_ES+Aux.csv")
 df_all_studies <- df %>% distinct(authyear) %>% flatten_chr()
